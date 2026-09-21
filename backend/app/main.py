@@ -14,7 +14,7 @@ from .business import FixtureRepository
 from .config import settings
 from .harness import Harness, event, identity_reset, new_snapshot, public_snapshot, redact
 from .llm import ModelError, analyze_turn, test_connection, validate_config
-from .schemas import MessageRequest, ModelConfig, SessionCreate
+from .schemas import MessageRequest, ModelConfig, SessionCreate, TurnAnalysis
 from .storage import Store
 
 
@@ -51,12 +51,12 @@ def create_app(overrides: dict | None = None):
         if snapshot is None:
             raise HTTPException(404, "Session not found or access denied.")
         state = snapshot["state"]
-        if state["verified"] and time.time() - (state.get("verified_at") or 0) > cfg["secret_ttl"]:
+        if state["status"] not in ("completed", "handoff_requested") and state["verified"] and time.time() - (state.get("verified_at") or 0) > cfg["secret_ttl"]:
             identity_reset(snapshot, "Verification expired; protected access closed.")
             state["identity_collected"] = []
             identities.pop(session_id, None)
             store.save(session_id, snapshot)
-        if not state["verified"] and session_id not in identities and state["identity_collected"]:
+        if state["status"] not in ("completed", "handoff_requested") and not state["verified"] and session_id not in identities and state["identity_collected"]:
             state["identity_collected"] = []
             event(snapshot, "identity_expired", "Unverified identity inputs were cleared from memory; case hints remain.")
             store.save(session_id, snapshot)
@@ -178,17 +178,20 @@ def create_app(overrides: dict | None = None):
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from None
             if receipt:
-                return receipt
+                return {**public_snapshot(snapshot), "reply": receipt["reply"]}
             if len(snapshot["messages"]) > 200:
                 raise HTTPException(409, "Session message limit reached. Start a new session.")
-            config = resolve_model(session_id, snapshot["state"])
             state = snapshot["state"]
             context = {key: state[key] for key in ("phase", "pending", "case_hints", "intent", "language", "identity_collected")}
             context["previous_assistant"] = next((m["content"] for m in reversed(snapshot["messages"]) if m["role"] == "assistant"), "")
-            try:
-                analysis = await analyze_turn(payload.message, context, config)
-            except ModelError as exc:
-                raise HTTPException(502, str(exc)) from None
+            if state["status"] in ("completed", "handoff_requested"):
+                analysis = TurnAnalysis(language=state["language"])
+            else:
+                config = resolve_model(session_id, state)
+                try:
+                    analysis = await analyze_turn(payload.message, context, config)
+                except ModelError as exc:
+                    raise HTTPException(502, str(exc)) from None
             identity = copy.deepcopy(identities.get(session_id, ({}, 0))[0])
             try:
                 reply = harness.run(snapshot, analysis, identity, payload.message, payload.turn_id)

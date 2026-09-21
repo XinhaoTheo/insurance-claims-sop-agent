@@ -43,12 +43,15 @@ def public_snapshot(snapshot):
 
 def redact(text, identity):
     """Only a redacted transcript is persisted or returned by the API."""
-    value = text
+    # Callers may mistakenly supply a full SSN despite the last-four prompt.
+    value = re.sub(r"(?<!\d)\d{3}[- ]?\d{2}[- ]?\d{4}(?!\d)", "[SSN redacted]", text)
     for field, supplied in sorted(identity.items(), key=lambda item: -len(str(item[1]))):
         if supplied:
-            value = re.sub(re.escape(str(supplied)), f"[{field} provided]", value, flags=re.I)
+            pattern = re.escape(str(supplied)).replace(r"\ ", r"\s+") if field == "name" else re.escape(str(supplied))
+            value = re.sub(pattern, f"[{field} provided]", value, flags=re.I)
     value = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[email provided]", value)
-    value = re.sub(r"\b\d{4}[-/]\d{2}[-/]\d{2}\b", "[date provided]", value)
+    value = re.sub(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", "[date provided]", value)
+    value = re.sub(r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}\b", "[date provided]", value, flags=re.I)
     value = re.sub(r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)", "[phone provided]", value)
     value = re.sub(r"(?i)((?:ssn|last four|last 4|后四位)[^\d]{0,25})\d{4}", r"\1[redacted]", value)
     return value
@@ -59,12 +62,21 @@ def wording(state, en, zh):
 
 
 def explicit_email_consent(message):
-    value = message.strip().casefold().replace("’", "'")
-    if re.search(r"\b(?:don't|do not|not|never|if|when)\b|不要|不发|不想|如果|？|\?", value):
-        return False
+    value = re.sub(r"\s+", " ", message.strip().casefold().replace("’", "'"))
     if re.fullmatch(r"(?:send|yes|yes please|sure|ok|okay|go ahead|please do|是|好的|好|可以|同意|发送)[.!。！ ]*", value):
         return True
-    return bool(re.search(r"\b(?:send|email)\b|发送|发给我|请发", value))
+    # Require the entire utterance to be affirmative. Unknown qualifications,
+    # conditions, questions, and negative objects require clarification.
+    english = (
+        r"(?:(?:yes|sure|okay|ok)[,!\.\s]+)?"
+        r"(?:(?:please|go ahead and|i would like you to|i'd like you to|you can) )?"
+        r"(?:send|email)(?: me)? "
+        r"(?:it|that|(?:(?:the|a|my) )?(?:email summary|summary|email))"
+        r"(?: to (?:me|my (?:verified|registered|on-file) (?:email|email address)))?"
+        r"(?: now)?(?:[, ]+please)?[.! ]*"
+    )
+    chinese = r"(?:好的[，, ]*)?(?:请)?(?:发送|发给我|发一下)(?:这封|这个|本次)?(?:邮件总结|邮件摘要|总结|摘要|邮件)?[。！! ]*"
+    return bool(re.fullmatch(english, value) or re.fullmatch(chinese, value))
 
 
 def identity_reset(snapshot, reason):
@@ -244,13 +256,13 @@ class Harness:
                 event(snapshot, "email_skipped", "Caller chose not to send; no email action executed.")
                 return empathy + wording(state, "Understood—I’ve skipped the email. Your claim status has not changed. Thank you for speaking with me.", "好的，已跳过邮件发送。案件状态没有改变，感谢您的沟通。")
             if analysis.email_choice == "send":
-                if not explicit_email_consent(message):
-                    return wording(state, "Please explicitly say whether to send the email summary or skip it. I haven’t sent anything.", "请明确选择发送邮件总结或跳过，目前没有发送任何内容。")
                 # Bind consent to the existing verified address and exact draft version.
                 contact = self.repo.get_contact(state)
                 supplied_email = analysis.identity.email
                 if supplied_email and supplied_email.casefold() != contact["email"].casefold():
                     return wording(state, "This demo sends only to the verified email on your record. Changing the recipient needs a separate verification process. Would you like to send to the verified address or skip?", "本 Demo 仅向客户记录中已核验的邮箱发送。更换收件地址需要单独核验。您希望发送到登记邮箱，还是跳过？")
+                if not explicit_email_consent(message):
+                    return wording(state, "Please explicitly say whether to send the email summary or skip it. I haven’t sent anything.", "请明确选择发送邮件总结或跳过，目前没有发送任何内容。")
                 event(snapshot, "email_consent", f"Explicit consent for summary version {state['summary_version']} and verified recipient.")
                 if self.email_failure:
                     state["email_status"] = "failed"
