@@ -242,7 +242,7 @@ def _offline_analysis(message: str, context: dict) -> TurnAnalysis:
         match = re.search(r"(?:我叫|我的姓名是|我的名字是|姓名\s*[:：])\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z ·.'-]{1,45})", text)
         if match:
             identity.name = re.split(r"(?:我的|保单|生日|出生|电话|邮箱)", match.group(1), maxsplit=1)[0].strip()
-        match = re.search(r"(?:dob|date of birth|birthday|born(?: on)?|birth date|生日|出生日期)(?:\s*(?:is|是|为|:|：))?\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})", text, re.I)
+        match = re.search(r"(?:dob|date of birth|birthday|born(?: on)?|birth date|生日|出生日期)(?:\s*(?:is|是|为|:|：))?(?:\s*(?:actually|really|应该是|其实是))?\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})", text, re.I)
         if not match and phase == "VERIFY_ID":
             match = re.fullmatch(r"\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})[.!。]?\s*", text)
         if match:
