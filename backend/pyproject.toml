@@ -1,0 +1,14 @@
+[project]
+name = "insurance-claims-sop-agent"
+version = "0.1.0"
+description = "A local, auditable insurance claims SOP harness"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "pydantic>=2.8,<3", "python-dotenv>=1,<2"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
