@@ -9,15 +9,16 @@ Built with React, TypeScript, FastAPI, Pydantic, and SQLite. Local Docker and th
 ## Workflow
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
 flowchart TB
-    Message["Customer message"] --> Analyze["LLM: understand the request"]
+    Message["Customer message"] --> Analyze["LLM: understand request"]
     Analyze --> SOP
     subgraph SOP["SOP harness"]
-        direction LR
+        direction TB
         Verify["VERIFY_ID"] --> Intent["RESOLVE_INTENT"] --> Process["PROCESS_CASE"] --> Post["POST_PROCESS"]
     end
-    Data["Claim records and conversation memory"] <--> SOP
-    SOP --> Reply["LLM: phrase the approved response"]
+    Data["Claim records<br/>and memory"] <--> SOP
+    SOP --> Reply["LLM: phrase approved reply"]
     Reply --> UI["Chat UI"]
 
     classDef interface fill:#f1f5f9,stroke:#64748b,color:#0f172a;

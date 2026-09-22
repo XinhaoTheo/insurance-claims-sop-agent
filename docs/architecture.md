@@ -5,24 +5,19 @@ Each normal active-session turn follows **model analysis â†’ schema validation â
 See the [overall workflow](../README.md#workflow).
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
 flowchart TD
-    User["Customer or API client"] --> API["API: check access and retries"]
-    API --> Parse["LLM: extract information"]
-    Parse --> Schema["Check output format"]
-    Schema --> Harness["SOP harness"]
-    Memory["State and caller hints"] <--> Harness
-    Harness --> Gates["Verification and action gates"]
-    Gates --> Tools["Customer / claim / guidance tools"]
-    Tools --> Fixtures["Read-only synthetic JSON fixtures"]
-    Tools --> Facts["Authorized facts and sources"]
-    Facts --> Plan["Approved reply content"]
-    Harness --> Plan
-    Plan --> Render["LLM: phrase the reply"]
-    Render --> Check["Check reply format"]
-    Check --> Persist["Save turn and simulated actions together"]
-    Render -->|Failure| Rollback["Failure: keep previous saved state"]
-    Persist --> SQLite[("SQLite: durable locally, temporary on Render Free")]
-    Persist --> User
+    Input["Customer message"] --> Analyze["LLM: extract fields"]
+    Analyze --> Validate["Check field formats"]
+    Validate --> SOP["SOP: apply gates"]
+    Memory["Saved hints"] <--> SOP
+    SOP --> Facts["Read authorized facts"]
+    Facts --> Plan["Build approved reply"]
+    Plan --> Render["LLM: phrase reply"]
+    Render --> Check{"Valid reply?"}
+    Check -->|Yes| Save["Save turn and actions"]
+    Check -->|No| Retry["Keep previous state"]
+    Save --> UI["Reply to customer"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
@@ -58,12 +53,13 @@ A turn may complete several phases in order. Corrections or expired verification
 ### Resolve intent
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
 flowchart TD
-    Saved["Remembered intent and caller case hints"] --> Query["Query only verified customer's cases"]
-    Query --> Count{"Matching cases?"}
-    Count -->|None| Clarify["Ask for another case clue"]
-    Count -->|Multiple| Distinguish["Ask which claim or creation year"]
-    Count -->|One| Bind["Bind selected case"]
+    Hints["Saved intent and hints"] --> Query["Find customer's claims"]
+    Query --> Count{"Matches?"}
+    Count -->|None| Clarify["Ask for a clue"]
+    Count -->|Several| Choose["Ask which claim"]
+    Count -->|One| Bind["Select claim"]
     Bind --> Process["PROCESS_CASE"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
@@ -72,16 +68,16 @@ flowchart TD
 ### Process the case
 
 ```mermaid
-flowchart LR
-    Question["Natural-language follow-up"] --> Topic["LLM: choose a supported topic"]
-    Topic --> Guard["Recheck verification and claim ownership"]
-    Guard --> Data["Claim fields + relevant guidance"]
-    Data --> Approved["Harness builds approved_reply"]
-    Approved --> Sources["Record fixture source identifiers"]
-    Approved --> Render["LLM: phrase approved facts"]
-    Render --> Validate["Check reply format"]
-    Validate --> Follow["Commit turn; continue questions or finish"]
-    Render -->|Failure| Retry["Rollback; caller may retry"]
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
+flowchart TD
+    Question["Follow-up question"] --> Topic["LLM: select topic"]
+    Topic --> Guard["Check identity and ownership"]
+    Guard --> Facts["Read facts and guidance"]
+    Facts --> Plan["Build reply with sources"]
+    Plan --> Render["LLM: phrase reply"]
+    Render --> Check{"Valid reply?"}
+    Check -->|Yes| Save["Save and continue"]
+    Check -->|No| Retry["Keep state; allow retry"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
@@ -89,13 +85,14 @@ flowchart LR
 ## Identity: extraction, validation, matching
 
 ```mermaid
-flowchart LR
-    Utterance["Caller: identity + denied January claim"] --> Extract["LLM: extract identity and case hints"]
-    Extract --> Validate["Check field formats"]
-    Validate --> PII["Identity values: temporary memory"]
-    Validate --> Hints["Case hints: saved with the conversation"]
-    Hints --> Later["Reuse after verification"]
-    PII --> Verify["Match customer records"]
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
+flowchart TD
+    Message["Identity and claim question"] --> Extract["LLM: extract fields"]
+    Extract --> Check["Check field formats"]
+    Check --> Identity["Identity: temporary memory"]
+    Check --> Hints["Case hints: saved state"]
+    Identity --> Match["Match customer records"]
+    Hints --> Later["Use after verification"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
@@ -118,13 +115,15 @@ Evidence also supports transcript redaction. Extraction and evidence accuracy st
 ### Verify identity
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
 flowchart TD
-    Input["New or corrected identity fields"] --> Match["Match standardized values to a unique customer"]
-    Match --> Gate{"3 matching identity categories, no conflict or unresolved value?"}
-    Gate -->|No| Stay["Ask for clarification or offer alternatives"]
-    Stay --> Input
-    Gate -->|Yes| Verified["Server records verified customer and time"]
-    Verified --> Next["RESOLVE_INTENT"]
+    Input["New or corrected identity"] --> Match["Match customer records"]
+    Match --> Gate{"3 matching categories?"}
+    Gate -->|No| Ask["Clarify or offer alternatives"]
+    Gate -->|Yes| Conflict{"Conflict or unresolved value?"}
+    Conflict -->|Yes| Ask
+    Conflict -->|No| Verify["Record verified customer"]
+    Verify --> Next["RESOLVE_INTENT"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
@@ -134,16 +133,16 @@ flowchart TD
 Case hints are saved even during verification, but cannot authorize claim access. The model identifies scope, emotion, refusal, and intent. The harness declines unrelated questions, offers verification alternatives, and offers human support after repeated refusal or unrelated requests. Explicit human requests produce a simulated handoff.
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
 flowchart TD
-    Turn["Each caller turn"] --> Signals["Scope, emotion, refusal, human request"]
-    Signals --> Store["Retain useful caller information"]
-    Store --> Decision{"Appropriate response"}
-    Decision -->|Frustrated / anxious / confused| Empathy["Acknowledge, explain, offer permitted alternatives"]
-    Decision -->|Unrelated| Decline["Decline and resume pending question"]
-    Decision -->|Repeated refusal / unrelated| Offer["Offer human or return to claim"]
-    Decision -->|Explicit human request| Human["Record simulated handoff; close session"]
-    Empathy --> Gate["All identity and consent gates still apply"]
-    Decline --> Gate
+    Turn["Customer message"] --> Signals["LLM: identify signals"]
+    Signals --> Memory["Save useful information"]
+    Memory --> Human{"Human requested?"}
+    Human -->|Yes| Transfer["Simulate handoff"]
+    Human -->|No| Repeated{"Repeated refusal or diversion?"}
+    Repeated -->|Yes| Offer["Offer human support"]
+    Repeated -->|No| Reply["Acknowledge emotion;<br/>decline unrelated questions"]
+    Reply --> Resume["Continue within SOP gates"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
@@ -153,19 +152,18 @@ The renderer receives approved content and phrases it in the caller's language. 
 Sending requires a current, unconditional choice, valid verification, the registered recipient, and the current summary version. An address alone is not consent. Conditional requests remain undecided. A registered-address reference may authorize sending without supplying a new address. Invalid or different recipients block sending. New substantive discussion updates the draft before a further send choice.
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
 flowchart TD
-    Done["Caller finishes case discussion"] --> Draft["Build versioned factual summary"]
-    Draft --> Offer["Offer send to recorded address or skip"]
-    Offer --> Analysis["Read model consent choice or button action"]
-    Analysis --> Choice{"Send now, skip, or undecided?"}
-    Choice -->|Unclear| Offer
-    Choice -->|Skip| Skip["Record skipped; complete"]
-    Choice -->|Send| Recipient["Check phase, identity, recipient, and draft version"]
-    Recipient --> Delivery{"Simulated send result"}
-    Delivery -->|Success| Render["Render confirmation; validate output"]
-    Render --> Outbox["Commit consent and outbox once; complete"]
-    Delivery -->|Failure| Retry["Report failure; offer retry or skip"]
-    Retry --> Offer
+    Draft["Prepare summary draft"] --> Offer["Offer send or skip"]
+    Offer --> Choice{"Customer choice?"}
+    Choice -->|Undecided| Wait["Clarify; do not send"]
+    Choice -->|Decided| SendNow{"Send now?"}
+    SendNow -->|No| Skip["Skip and complete"]
+    SendNow -->|Yes| Gate["Check sending gates"]
+    Gate --> Send{"Mock send succeeds?"}
+    Send -->|Yes| Render["Render confirmation"]
+    Render --> Save["Save consent and outbox"]
+    Send -->|No| Retry["Offer retry or skip"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
@@ -175,13 +173,14 @@ UI buttons use `caller_action` values such as `send_summary`; they still pass th
 ## Configuration, storage, and retries
 
 ```mermaid
-flowchart LR
-    Env["Environment defaults"] --> Resolve["config.py: merge and validate"]
-    UI["Explicit UI or API settings"] --> Resolve
-    Resolve --> Config["Resolved ModelConfig"]
-    Config --> LLM["llm.py: call supplied protocol and model"]
-    Constants["constants.py: workflow fields, context keys, protocol limits"] --> LLM
-    Constants --> Harness["SOP and business tools"]
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
+flowchart TD
+    Env["Environment defaults"] --> Resolve["config.py: merge and check"]
+    UI["Explicit settings"] --> Resolve
+    Resolve --> Config["ModelConfig"]
+    Config --> Client["llm.py: call model API"]
+    Constants["Shared constants"] --> Client
+    Constants --> SOP["SOP and business tools"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
@@ -194,17 +193,18 @@ flowchart LR
 - Retrying the same `turn_id`, message, and action returns the saved reply without repeating actions. Reusing the ID with different input returns HTTP 409. Model failures leave the prior committed state intact.
 
 ```mermaid
-flowchart LR
-    Request["Session token + message + turn_id + optional caller_action"] --> Auth["Compare hashed session token"]
-    Auth --> Lock["Acquire per-session lock"]
-    Lock --> Existing{"Turn already saved?"}
-    Existing -->|Same message and action| Replay["Original reply + current snapshot"]
-    Existing -->|Different message or action| Conflict["HTTP 409"]
-    Existing -->|No| Execute["Analyze; run SOP on proposed state"]
-    Execute --> Render["Render approved reply; validate result"]
-    Render -->|Success| Transaction["Save state, reply, and mock outbox together"]
-    Render -->|Failure| Rollback["Discard proposed state and actions"]
-    Transaction --> Response["Return redacted snapshot"]
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
+flowchart TD
+    Request["Message and turn ID"] --> Auth["Check session access"]
+    Auth --> Lock["Lock this session"]
+    Lock --> Saved{"Turn already saved?"}
+    Saved -->|Yes| Same{"Same input?"}
+    Same -->|Yes| Replay["Return saved reply"]
+    Same -->|No| Conflict["HTTP 409"]
+    Saved -->|No| Run["Analyze, apply SOP,<br/>and render reply"]
+    Run --> Valid{"Successful?"}
+    Valid -->|No| Keep["Keep previous state"]
+    Valid -->|Yes| Save["Save state, reply,<br/>and mock outbox together"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
@@ -214,22 +214,14 @@ Run one worker and one instance: locks and temporary credentials are process-loc
 ## Local and cloud deployment
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 20, "rankSpacing": 30}, "themeVariables": {"fontSize": "14px"}}}%%
 flowchart TD
-    Source["GitHub source"] --> Node["Node 22: npm ci + frontend build"]
-    Source --> Python["Python 3.12: pinned backend dependencies"]
-    Node --> Image["Shared application image"]
-    Python --> Image
-    Image --> Container["One Uvicorn worker"]
-    Env["Runtime .env and explicit session settings"] --> Config["config.py"]
-    Config --> Container
-    Container --> UI["Browser localhost:8000"]
-    Image --> Cloud["Cloud service: one instance"]
-    Cloud --> URL["Browser: public HTTPS URL"]
-    Container --> Volume[("claims-data /data/insurance.db")]
-    Container --> Model["Chosen model API"]
-    Config --> Cloud
-    Cloud --> Temporary[("Temporary SQLite on Render Free")]
-    Cloud --> Model
+    Source["GitHub source"] --> Build["Build React and Python app"]
+    Build --> Image["Shared Docker image"]
+    Image --> Local["Local: one worker"]
+    Image --> Cloud["Cloud: one instance"]
+    Local --> DetailsLocal["localhost:8000<br/>SQLite in Docker volume"]
+    Cloud --> DetailsCloud["Public HTTPS URL<br/>Temporary SQLite on Render Free"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
 ```
