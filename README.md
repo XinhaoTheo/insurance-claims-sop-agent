@@ -2,9 +2,13 @@
 
 An insurance support demo with natural conversation and a code-controlled workflow. The LLM interprets messages and writes replies; the harness controls identity verification, case access, and email consent. Useful case hints are remembered across phases.
 
-**[Open the demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** — no API key required. The owner funds model usage. The free service may need about a minute to wake.
+**Live website: [insurance-claims-sop-agent-d5gs.onrender.com](https://insurance-claims-sop-agent-d5gs.onrender.com)**
+
+No API key is required on this website; the owner funds model usage. The free service may need about a minute to wake. To use your own model or key, run the local version below.
 
 Built with React, TypeScript, FastAPI, Pydantic, and SQLite. Local Docker and the hosted demo use the same application. Customer data is synthetic; email delivery and human transfers are simulated.
+
+![Live demo showing a verified claim conversation and workflow state](docs/images/demo.png)
 
 ## Workflow
 
@@ -44,17 +48,17 @@ Claim details require at least three matching identity categories. The agent can
 
 ## Local setup
 
-Install Git and Docker Desktop, then start Docker. You need an OpenAI-compatible or Anthropic API key and internet access for model requests.
+Install Git and Docker Desktop, then start Docker. You need access to this repository, an OpenAI-compatible or Anthropic API key, and internet access for model requests.
 
 ### 1. Download and configure
 
 ```bash
-git clone --branch feat/hosted-demo https://github.com/XinhaoTheo/insurance-claims-sop-agent.git
+git clone https://github.com/XinhaoTheo/insurance-claims-sop-agent.git
 cd insurance-claims-sop-agent
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit the `.env` file in the repository root:
 
 ```dotenv
 MODEL_API_PROTOCOL=openai
@@ -75,9 +79,16 @@ Open **[localhost:8000](http://localhost:8000)**. Docker builds the UI and backe
 
 Alternatively, start without model defaults and open **Model settings** in the UI. Enter the protocol, base URL, model, and key, then click **Test connection → Apply model**. These settings apply to the current conversation; temporary keys expire after one hour or a server restart.
 
-After editing `.env`, run `docker compose up -d`, reload the page, and start a new conversation.
+### Change your model or API key
 
-### 3. Try a conversation
+| Where | What to change | Apply the change |
+| --- | --- | --- |
+| Root `.env` file | `MODEL_API_KEY` for the key, `MODEL_NAME` for the model; change `MODEL_API_PROTOCOL` and `MODEL_BASE_URL` when switching providers. | Run `docker compose up -d`, reload, and select **New conversation**. |
+| Local UI → **Model settings** | API protocol, base URL, model name, and API key. | Click **Test connection**, then **Apply model** for this conversation. |
+
+The hosted website uses a fixed owner-managed model and does not show these settings. For your own hosted deployment, change the same variables in the hosting provider's environment settings.
+
+### Try a conversation
 
 ```text
 I'm the policyholder. My name is Margaret Chen, policy POL-9921.

@@ -1,20 +1,20 @@
 # Hosting
 
-**[Live demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** · Render Free · branch `feat/hosted-demo`
+**[Live demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** · Render Free · deployment branch `feat/hosted-demo`
 
 The cloud and local versions use the same Dockerfile, UI, API, and SOP. Run one instance with one worker. SQLite is created at `/data/insurance.db`; no separate database service is needed.
 
 ## Deploy on Render
 
 1. Push the application and root `render.yaml` to GitHub.
-2. In Render, choose **New → Blueprint**, connect the repository, and select `feat/hosted-demo`.
+2. In Render, choose **New → Blueprint**, connect the repository, and select `main`.
 3. Review the Blueprint: one Docker web service on the Free plan, no disk or paid database, health check `/health`.
 4. Add `MODEL_API_KEY` in the service's **Environment** settings. The Blueprint supplies `openai`, the official endpoint, and `gpt-5.4-mini`; change these if needed.
 5. Save and deploy. Open the generated HTTPS URL once the deployment is live.
 
 Keep keys in Render environment settings, never in Git or `render.yaml`. Model usage is billed to the key owner. With the server key configured, visitors can chat immediately and model settings are hidden.
 
-Subsequent pushes to the connected branch trigger deployments. Check **Deploys**, **Logs**, and `/health` when diagnosing startup failures.
+Subsequent pushes to the connected branch trigger deployments. The existing demo still follows `feat/hosted-demo`; merging into `main` does not change that setting. Check **Deploys**, **Logs**, and `/health` when diagnosing startup failures.
 
 ## Storage and model settings
 
