@@ -19,6 +19,7 @@ import time
 
 from smoke_test import Client, SAMPLE
 from app.config import resolve_model_config, settings
+from app.schemas import ModelConfig
 
 
 SAFE_STATE = (
@@ -269,11 +270,13 @@ def main():
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--output", type=Path, default=Path("test-results/live-evaluation.json"))
     parser.add_argument("--scenario", choices=SCENARIOS, help="Run one scenario; omit timing benchmark for focused reruns.")
+    parser.add_argument("--server-model", action="store_true", help="Use the deployed operator-funded model without supplying a visitor key.")
     args = parser.parse_args()
-    config = resolve_model_config(settings()["model_config"])
+    config = ModelConfig() if args.server_model else resolve_model_config(settings()["model_config"])
     client = Client(args.base_url, config)
-    report = dict(started_at=datetime.now(timezone.utc).isoformat(), model=config.model,
-                  api_protocol=config.api_protocol, default_demo_date=DEFAULT_DEMO_DATE, scenarios=[],
+    public_config = client.request("GET", "/api/config") if args.server_model else {}
+    report = dict(started_at=datetime.now(timezone.utc).isoformat(), model=public_config.get("model", config.model),
+                  api_protocol=public_config.get("api_protocol", config.api_protocol), default_demo_date=DEFAULT_DEMO_DATE, scenarios=[],
                   date_policy="Historical fixture date by default; current_date uses the local calendar date recorded in that scenario.",
                   limitation="Keyword/language checks are heuristics. Review replies; two-session timing is not a load test.")
     for name in [args.scenario] if args.scenario else SCENARIOS:
