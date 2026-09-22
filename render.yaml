@@ -1,0 +1,16 @@
+# Free preview: SQLite sessions reset when the service sleeps or restarts.
+services:
+  - type: web
+    name: insurance-claims-sop-agent
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    numInstances: 1
+    envVars:
+      - key: HOSTED_DEMO
+        value: "true"
+      - key: DATABASE_PATH
+        value: /data/insurance.db
+      - key: PORT
+        value: "8000"
