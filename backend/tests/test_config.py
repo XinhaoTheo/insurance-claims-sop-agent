@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.config import ConfigurationError, resolve_model_config, settings
+from app.config import ConfigurationError, PROTOCOL_BASE_URLS, resolve_model_config, settings
 from app.schemas import ModelConfig
 
 
@@ -99,3 +99,64 @@ def test_protocol_switch_requires_own_key():
 def test_explicit_blank_override_is_not_replaced_by_a_deployment_default(field):
     with pytest.raises(ConfigurationError):
         resolve_model_config(DEFAULTS, ModelConfig(**{field: " "}))
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+def test_hosted_demo_accepts_official_protocol_endpoints(protocol):
+    result = resolve_model_config(
+        ModelConfig(api_key="own-key", model="test-model", api_protocol=protocol),
+        ModelConfig(base_url=PROTOCOL_BASE_URLS[protocol] + "/"),
+        allowed_base_urls=set(PROTOCOL_BASE_URLS.values()),
+    )
+    assert result.base_url == PROTOCOL_BASE_URLS[protocol]
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:11434/v1",
+    "http://127.0.0.1:8000/v1",
+    "https://192.168.1.1/v1",
+    "https://169.254.169.254/latest/meta-data",
+    "https://custom-provider.test/v1",
+    "https://api.openai.com/v1/other",
+    "https://api.openai.com/v1/../v1",
+    "https://api.openai.com.attacker.test/v1",
+])
+def test_hosted_demo_rejects_endpoints_outside_exact_allowlist(url):
+    with pytest.raises(ConfigurationError, match="administrator-approved"):
+        resolve_model_config(
+            ModelConfig(api_key="own-key", model="test-model", base_url=url),
+            allowed_base_urls=set(PROTOCOL_BASE_URLS.values()),
+        )
+
+
+def test_hosted_settings_default_to_official_endpoints(monkeypatch):
+    monkeypatch.setenv("HOSTED_DEMO", "true")
+    monkeypatch.delenv("HOSTED_MODEL_BASE_URLS", raising=False)
+    config = settings()
+    assert config["hosted"] is True
+    assert config["allowed_model_base_urls"] == set(PROTOCOL_BASE_URLS.values())
+
+
+def test_administrator_can_configure_a_compatible_hosted_endpoint(monkeypatch):
+    monkeypatch.setenv("HOSTED_DEMO", "true")
+    monkeypatch.setenv("HOSTED_MODEL_BASE_URLS", " https://custom-provider.test/v1/, https://api.openai.com/v1 ")
+    config = settings()
+    assert config["allowed_model_base_urls"] == {"https://custom-provider.test/v1", "https://api.openai.com/v1"}
+    result = resolve_model_config(
+        ModelConfig(api_key="own-key", model="test-model", base_url="https://custom-provider.test/v1"),
+        allowed_base_urls=config["allowed_model_base_urls"],
+    )
+    assert result.base_url == "https://custom-provider.test/v1"
+
+
+def test_local_settings_leave_endpoint_selection_unrestricted(monkeypatch):
+    monkeypatch.delenv("HOSTED_DEMO", raising=False)
+    monkeypatch.setenv("HOSTED_MODEL_BASE_URLS", "https://api.openai.com/v1")
+    config = settings()
+    assert config["hosted"] is False
+    assert config["allowed_model_base_urls"] is None
+    result = resolve_model_config(
+        ModelConfig(api_key="local-key", model="local-model", base_url="http://localhost:11434/v1"),
+        allowed_base_urls=config["allowed_model_base_urls"],
+    )
+    assert result.base_url == "http://localhost:11434/v1"

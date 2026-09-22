@@ -19,7 +19,12 @@ class ConfigurationError(ValueError):
     """A model configuration error that is safe to display."""
 
 
-def resolve_model_config(defaults: ModelConfig, supplied: ModelConfig | None = None) -> ModelConfig:
+def resolve_model_config(
+    defaults: ModelConfig,
+    supplied: ModelConfig | None = None,
+    *,
+    allowed_base_urls: set[str] | None = None,
+) -> ModelConfig:
     overrides = supplied.model_dump(exclude_unset=True) if supplied is not None else {}
     values = {**defaults.model_dump(), **overrides}
     default_protocol = defaults.api_protocol or "openai"
@@ -44,6 +49,8 @@ def resolve_model_config(defaults: ModelConfig, supplied: ModelConfig | None = N
         raise ConfigurationError("Use HTTPS for remote model endpoints.")
     if any(char.isspace() for char in values["base_url"]) or any(char in values["api_key"] for char in "\r\n"):
         raise ConfigurationError("Check the API key and base URL format.")
+    if allowed_base_urls is not None and values["base_url"] not in allowed_base_urls:
+        raise ConfigurationError("This hosted demo only supports administrator-approved model endpoints.")
     endpoint_changed = values["base_url"] != default_url.strip().rstrip("/") or protocol != default_protocol
     if defaults.api_key and endpoint_changed and not overrides.get("api_key"):
         raise ConfigurationError("Supply your own API key for a different endpoint or protocol.")
@@ -52,7 +59,16 @@ def resolve_model_config(defaults: ModelConfig, supplied: ModelConfig | None = N
 
 def settings():
     protocol = os.getenv("MODEL_API_PROTOCOL") or "openai"
+    hosted = os.getenv("HOSTED_DEMO", "false").lower() == "true"
+    allowed_urls_setting = os.getenv("HOSTED_MODEL_BASE_URLS", "").strip()
+    allowed_base_urls = {
+        url.strip().rstrip("/") for url in allowed_urls_setting.split(",") if url.strip()
+    } if allowed_urls_setting else set(PROTOCOL_BASE_URLS.values())
+    if hosted and not allowed_base_urls:
+        raise ConfigurationError("HOSTED_MODEL_BASE_URLS must contain at least one model endpoint.")
     return {
+        "hosted": hosted,
+        "allowed_model_base_urls": allowed_base_urls if hosted else None,
         "database": os.getenv("DATABASE_PATH", str(PROJECT / "data" / "insurance.db")),
         "fixtures": Path(os.getenv("FIXTURES_PATH", str(PROJECT / "fixtures"))),
         "static": Path(os.getenv("STATIC_PATH", str(PROJECT / "frontend" / "dist"))),

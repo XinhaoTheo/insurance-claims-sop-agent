@@ -1,6 +1,7 @@
 import asyncio
 import secrets
 import time
+from collections import deque
 from datetime import date
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from .storage import Store
 def create_app(overrides: dict | None = None):
     cfg = {**settings(), **(overrides or {})}
     app = FastAPI(title="Insurance Claims SOP Harness", version="0.1.0",
-                  description="Local SOP demo using a configured OpenAI-compatible or Anthropic model. Email and human handoff are simulated.")
+                  description="SOP demo using a configured OpenAI-compatible or Anthropic model. Email and human handoff are simulated.")
     store = Store(str(cfg["database"]))
     harness = Harness(FixtureRepository(cfg["fixtures"]), email_failure=cfg["email_failure"])
     credentials: dict[str, tuple[ModelConfig, float]] = {}
@@ -32,6 +33,31 @@ def create_app(overrides: dict | None = None):
     app.state.identities = identities
     app.state.credentials = credentials
     app.state.settings = cfg
+
+    if cfg["hosted"]:
+        recent_requests: deque[float] = deque()
+
+        @app.middleware("http")
+        async def hosted_requests(request, call_next):
+            if request.url.path.startswith("/api/") and request.method == "POST":
+                now = time.monotonic()
+                while recent_requests and recent_requests[0] <= now - 60:
+                    recent_requests.popleft()
+                if len(recent_requests) >= 60:
+                    return JSONResponse(status_code=429,
+                                        content={"detail": "The shared demo is busy. Please retry in one minute."},
+                                        headers={"Retry-After": "60", "Cache-Control": "no-store"})
+                recent_requests.append(now)
+            response = await call_next(request)
+            if request.url.path.startswith("/api/"):
+                response.headers["Cache-Control"] = "no-store"
+            return response
+
+    def model_configuration(supplied=None):
+        defaults = cfg["model_config"]
+        if cfg["hosted"]:
+            defaults = defaults.model_copy(update={"api_key": None})
+        return resolve_model_config(defaults, supplied, allowed_base_urls=cfg["allowed_model_base_urls"])
 
     def cleanup():
         now = time.monotonic()
@@ -95,17 +121,22 @@ def create_app(overrides: dict | None = None):
     async def configuration():
         defaults = cfg["model_config"]
         try:
-            resolve_model_config(defaults)
+            model_configuration()
             configured = True
         except ConfigurationError:
             configured = False
-        return {"api_protocol": defaults.api_protocol, "base_url": defaults.base_url, "model": defaults.model,
+        base_url = defaults.base_url
+        if cfg["hosted"] and base_url not in cfg["allowed_model_base_urls"]:
+            official_url = PROTOCOL_BASE_URLS[defaults.api_protocol or "openai"]
+            base_url = official_url if official_url in cfg["allowed_model_base_urls"] else sorted(cfg["allowed_model_base_urls"])[0]
+        return {"api_protocol": defaults.api_protocol, "base_url": base_url, "model": defaults.model,
                 "configured": configured, "protocol_base_urls": PROTOCOL_BASE_URLS,
+                "hosted": cfg["hosted"], "allowed_model_base_urls": sorted(cfg["allowed_model_base_urls"]) if cfg["hosted"] else None,
                 "demo_date": cfg["demo_date"], "email_mode": "mock"}
 
     @app.post("/api/models/test")
     async def check_model(payload: ModelConfig):
-        config = resolve_model_config(cfg["model_config"], payload)
+        config = model_configuration(payload)
         return await test_connection(config)
 
     @app.post("/api/sessions", status_code=201)
@@ -113,7 +144,7 @@ def create_app(overrides: dict | None = None):
         cleanup()
         supplied = ModelConfig(**payload.model_dump(exclude_unset=True, exclude={"demo_date"}))
         try:
-            config = resolve_model_config(cfg["model_config"], supplied)
+            config = model_configuration(supplied)
         except ConfigurationError:
             if supplied.model_fields_set:
                 raise
@@ -144,7 +175,7 @@ def create_app(overrides: dict | None = None):
     async def configure_model(session_id: str, payload: ModelConfig, access: str = Depends(token)):
         async with locks.setdefault(session_id, asyncio.Lock()):
             snapshot = load(session_id, access)
-            config = resolve_model_config(cfg["model_config"], payload)
+            config = model_configuration(payload)
             credentials[session_id] = (config, time.monotonic() + cfg["secret_ttl"])
             event(snapshot, "model_configured", f"Configured {config.api_protocol}; no API key stored in database.")
             store.save(session_id, snapshot)
