@@ -14,3 +14,9 @@ services:
         value: /data/insurance.db
       - key: PORT
         value: "8000"
+      - key: MODEL_API_PROTOCOL
+        value: openai
+      - key: MODEL_BASE_URL
+        value: https://api.openai.com/v1
+      - key: MODEL_NAME
+        value: gpt-5.4-mini
