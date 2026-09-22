@@ -49,7 +49,12 @@ class IdentityFields(BaseModel):
 
 
 class IdentityEvidence(BaseModel):
-    """Raw spans for redaction; a span with a null identity value needs clarification."""
+    """Verbatim concrete identity values supplied in the latest caller message.
+
+    Leave a field null when the caller only names it, refers to a stored value,
+    or refuses to provide it. Preserve invalid or ambiguous concrete values here
+    even when their corresponding identity fields are null.
+    """
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, str_min_length=1)
     name: str | None = None
     dob: str | None = None
@@ -89,7 +94,12 @@ class TurnAnalysis(BaseModel):
     human_requested: bool = False
     representative: bool = False
     finish: bool = False
-    email_choice: Literal["send", "skip", "unclear"] = "unclear"
+    email_choice: Literal["send", "skip", "unclear"] = Field(
+        default="unclear",
+        description="Send requires an unconditional request to send now; skip requires a definite refusal. "
+        "Conditional requests, postponement, questions, and undecided choices are always unclear. "
+        "Do not infer skip or send by evaluating whether a condition is currently met.",
+    )
 
 
 class ReplyPresentation(BaseModel):

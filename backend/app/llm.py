@@ -36,6 +36,8 @@ SYSTEM = """# Role and boundaries
   detail, or declining to provide it does not supply a value. For example,
   "my verified email" and "the address on file" refer to a stored address;
   leave both email fields null. Apply this distinction in every language.
+- "I refuse to give my SSN" sets refusal=true and leaves both ssn_last4 fields
+  null. A refusal is not a supplied-but-unusable identity value.
 - For every supplied identity value, put the exact verbatim supporting span
   from that latest message into the corresponding identity_evidence field.
 - Quote only the identity value's smallest complete span, excluding surrounding
@@ -130,6 +132,8 @@ SYSTEM = """# Role and boundaries
   identity_evidence.email="alex@", even when email_choice is send.
 - Questions about sending, conditional requests, postponed requests, uncertainty,
   and statements such as "send me nothing" do not authorize sending.
+- Conditional requests are unclear even when their condition is currently false;
+  do not infer a decision to skip or send from the claim status.
 - Use skip for a definite decision to decline the summary, including a negative
   short answer to the sending offer. A request to wait, "not now", or a correction
   that the caller wants to review the contents before deciding is unclear, not
