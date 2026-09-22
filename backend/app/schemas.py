@@ -3,7 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class IdentityFields(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, str_min_length=1)
     name: str | None = None
     dob: str | None = None
     phone: str | None = None
@@ -26,6 +26,7 @@ class TurnAnalysis(BaseModel):
     """Untrusted model observations. Intentionally no phase or verified fields."""
     model_config = ConfigDict(extra="forbid")
     identity: IdentityFields = Field(default_factory=IdentityFields)
+    identity_evidence: IdentityFields = Field(default_factory=IdentityFields)
     hints: CaseHints = Field(default_factory=CaseHints)
     intent: Literal["status_inquiry", "denial_question", "document_submission", "payment_question", "next_steps", "general_claim_question"] | None = None
     topic: Literal["overview", "denial", "documents", "alternatives", "submission_method", "processing_time", "deadline", "payment", "receipt", "format", "unknown"] = "overview"
@@ -36,15 +37,20 @@ class TurnAnalysis(BaseModel):
     representative: bool = False
     finish: bool = False
     email_choice: Literal["send", "skip", "unclear"] = "unclear"
-    language: Literal["en", "zh"] = "en"
+
+
+class ReplyPresentation(BaseModel):
+    """Customer-facing wording without business state or action fields."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    reply: str = Field(min_length=1)
 
 
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["live", "offline"] = "offline"
-    api_key: str | None = Field(default=None, max_length=4096, repr=False)
-    base_url: str | None = Field(default=None, max_length=500)
-    model: str | None = Field(default=None, max_length=150)
+    api_protocol: Literal["openai", "anthropic"] | None = None
+    api_key: str | None = Field(default=None, repr=False)
+    base_url: str | None = None
+    model: str | None = None
 
 
 class SessionCreate(ModelConfig):
@@ -53,8 +59,6 @@ class SessionCreate(ModelConfig):
 
 class MessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    message: str = Field(min_length=1, max_length=4000)
-    turn_id: str = Field(min_length=1, max_length=100)
-
-
-PHASES = ["VERIFY_ID", "RESOLVE_INTENT", "PROCESS_CASE", "POST_PROCESS"]
+    message: str = Field(min_length=1)
+    turn_id: str = Field(min_length=1)
+    caller_action: Literal["send_summary", "skip_summary", "finish_case"] | None = None

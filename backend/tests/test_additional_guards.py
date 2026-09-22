@@ -3,49 +3,36 @@ import pytest
 from fastapi.testclient import TestClient
 from app.business import FixtureRepository
 from app.harness import Harness, new_snapshot
-from app.llm import analyze_turn
 from app.main import create_app
-from app.schemas import TurnAnalysis
+from app.schemas import ModelConfig, TurnAnalysis
 
 ROOT = Path(__file__).resolve().parents[2]
 SAMPLE = "My name is Margaret Chen. DOB is 1985-03-15. SSN last four is 4472. My denied healthcare claim was from January."
 
 
-async def test_natural_dob_correction_is_extracted_after_verification():
-    observation = await analyze_turn("My DOB is actually 1985-03-16.", {"phase": "PROCESS_CASE"}, {"mode": "offline"})
-    assert observation.identity.dob == "1985-03-16"
-
-
 def ready_for_post():
     harness = Harness(FixtureRepository(ROOT))
-    snapshot, identity = new_snapshot("sample", "offline", "2026-03-10"), {}
+    snapshot, identity = new_snapshot("sample", "2026-03-10"), {}
     harness.run(snapshot, TurnAnalysis(identity={"name": "Margaret Chen", "dob": "1985-03-15", "ssn_last4": "4472"},
-                hints={"case_type": "healthcare", "status": "denied"}, intent="denial_question"), identity, SAMPLE, "verify")
-    harness.run(snapshot, TurnAnalysis(finish=True), identity, "That's all", "finish")
+                hints={"case_type": "healthcare", "status": "denied"}, intent="denial_question"), identity, "verify")
+    harness.run(snapshot, TurnAnalysis(finish=True), identity, "finish")
     return harness, snapshot, identity
 
 
-@pytest.mark.parametrize("message", ["What is in the summary?", "Send it if my claim gets approved", "I do not want email", "Maybe later", "Can you explain how to send me the email summary", "I am worried you will send me email", "Send me the summary only after I confirm the address", "Send me nothing", "Send me the summary tomorrow", "发送邮件但是先不要发"])
-def test_model_cannot_grant_sending_consent_without_affirmative_caller_text(message):
+def test_unclear_observation_keeps_email_choice_pending():
     harness, snapshot, identity = ready_for_post()
-    harness.run(snapshot, TurnAnalysis(email_choice="send"), identity, message, "untrusted-model-consent")
+    harness.run(snapshot, TurnAnalysis(email_choice="unclear"), identity, "no-current-consent")
     assert snapshot["state"]["email_status"] == "awaiting_choice"
     assert not any(e["kind"] == "email_simulated" for e in snapshot["events"])
 
 
-@pytest.mark.parametrize("message", ["Yes, send me the summary.", "Yes, send the email summary to my verified email.", "Please email me a summary", "Send it to my registered email now", "请发送邮件总结"])
-def test_explicit_immediate_consent_is_accepted(message):
-    harness, snapshot, identity = ready_for_post()
-    harness.run(snapshot, TurnAnalysis(email_choice="send"), identity, message, "consent")
-    assert snapshot["state"]["email_status"] == "simulated_sent"
-
-
 @pytest.mark.parametrize("ssn", ["123-45-6789", "123 45 6789", "123456789"])
-def test_accidental_full_ssn_is_not_persisted(tmp_path, ssn):
-    app = create_app({"database": str(tmp_path / "db")})
+def test_accidental_full_ssn_is_not_persisted(tmp_path, ssn, model_observations):
+    app = create_app({"database": str(tmp_path / "db"), "model_config": ModelConfig(api_key="test-secret", model="test-model", base_url="https://example.test/v1")})
     with TestClient(app) as client:
-        session = client.post("/api/sessions", json={"mode": "offline"}).json()
+        session = client.post("/api/sessions", json={}).json()
         headers = {"Authorization": "Bearer " + session["access_token"]}
+        model_observations.add(f"My SSN is {ssn}. I need claim help.", {"intent": "general_claim_question"})
         result = client.post(f"/api/sessions/{session['session_id']}/messages", headers=headers,
                              json={"message": f"My SSN is {ssn}. I need claim help.", "turn_id": "full-ssn"})
         assert result.status_code == 200
@@ -55,34 +42,43 @@ def test_accidental_full_ssn_is_not_persisted(tmp_path, ssn):
 
 
 def test_deployment_key_is_never_forwarded_to_a_caller_endpoint(tmp_path):
-    app = create_app({"database": str(tmp_path / "db"), "api_key": "deployment-secret", "model": "model-x", "base_url": "https://trusted.test/v1"})
+    app = create_app({"database": str(tmp_path / "db"), "model_config": ModelConfig(api_key="deployment-secret", model="model-x", base_url="https://trusted.test/v1")})
     with TestClient(app) as client:
-        result = client.post("/api/sessions", json={"mode": "live", "base_url": "https://untrusted.test/v1", "model": "model-x"})
+        result = client.post("/api/sessions", json={"base_url": "https://untrusted.test/v1", "model": "model-x"})
         assert result.status_code == 400
         assert "deployment-secret" not in result.text
 
 
-def test_original_natural_birthdate_is_not_persisted(tmp_path):
+@pytest.mark.parametrize("birthdate", ["March 15, 1985", "15 de marzo de 1985", "15 mars 1985", "1985年3月15日", "١٥ مارس ١٩٨٥"])
+def test_normalized_birthdate_evidence_is_redacted(tmp_path, model_observations, birthdate):
     path = tmp_path / "db"
-    app = create_app({"database": str(path)})
+    app = create_app({"database": str(path), "model_config": ModelConfig(api_key="test-secret", model="test-model", base_url="https://example.test/v1")})
     with TestClient(app) as client:
-        session = client.post("/api/sessions", json={"mode": "offline"}).json()
+        session = client.post("/api/sessions", json={}).json()
         headers = {"Authorization": "Bearer " + session["access_token"]}
-        message = SAMPLE.replace("1985-03-15", "March 15, 1985")
+        message = SAMPLE.replace("1985-03-15", birthdate)
+        model_observations.add(message, {"identity": {"name": "Margaret Chen", "dob": "1985-03-15", "ssn_last4": "4472"}, "identity_evidence": {"dob": birthdate}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
         result = client.post(f"/api/sessions/{session['session_id']}/messages", headers=headers, json={"message": message, "turn_id": "birthdate"})
+        assert result.status_code == 200, result.text
         assert result.json()["state"]["verified"]
-        assert "March 15, 1985" not in result.text
         snapshot = app.state.store.load(session["session_id"], session["access_token"])
-        assert "March 15, 1985" not in str(snapshot)
+        for raw_value in (birthdate, "1985-03-15", "Margaret Chen", "4472"):
+            assert raw_value not in str(result.json())
+            assert raw_value not in str(snapshot)
+            assert raw_value not in model_observations.render_calls[-1]["message"]
+        assert "[dob provided]" in snapshot["messages"][-2]["content"]
 
 
-def test_old_turn_replay_and_verification_expiry_preserve_completed_session(tmp_path):
+def test_old_turn_replay_and_verification_expiry_preserve_completed_session(tmp_path, model_observations):
     import time
-    app = create_app({"database": str(tmp_path / "db")})
+    app = create_app({"database": str(tmp_path / "db"), "model_config": ModelConfig(api_key="test-secret", model="test-model", base_url="https://example.test/v1")})
     with TestClient(app) as client:
-        session = client.post("/api/sessions", json={"mode": "offline"}).json()
+        session = client.post("/api/sessions", json={}).json()
         url = f"/api/sessions/{session['session_id']}"
         headers = {"Authorization": "Bearer " + session["access_token"]}
+        model_observations.add(SAMPLE, {"identity": {"name": "Margaret Chen", "dob": "1985-03-15", "ssn_last4": "4472"}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
+        model_observations.add("That's all", {"finish": True})
+        model_observations.add("Skip the email", {"email_choice": "skip"})
         for turn_id, message in (("initial", SAMPLE), ("finish", "That's all"), ("skip", "Skip the email")):
             response = client.post(url + "/messages", headers=headers, json={"message": message, "turn_id": turn_id})
             assert response.status_code == 200

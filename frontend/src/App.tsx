@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
-type Mode = 'offline' | 'live';
-type Config = { default_mode: Mode; base_url: string; model: string; configured: boolean; demo_date: string; email_mode: string };
+type ApiProtocol = 'openai' | 'anthropic';
+type Config = { api_protocol: ApiProtocol; protocol_base_urls: Record<ApiProtocol, string>; base_url: string | null; model: string | null; configured: boolean; demo_date: string; email_mode: string };
 type Credentials = { session_id: string; access_token: string };
+type CallerAction = 'send_summary' | 'skip_summary' | 'finish_case';
+type OutgoingTurn = { message: string; turn_id: string; caller_action?: CallerAction };
 type Snapshot = {
-  session_id: string; access_token?: string;
-  state: { phase: string; status: string; verified: boolean; matched_fields: string[]; identity_collected: string[]; intent: string | null; case_hints: Record<string, unknown>; selected_case_id: string | null; language: string; email_status: string; model_mode: Mode; demo_date: string; pending: string | null };
-  messages: { role: 'user' | 'assistant'; content: string; turn_id?: string }[];
-  events: { kind: string; phase: string; detail: unknown; at: string }[];
+  session_id: string; model_configured: boolean;
+  state: { phase: string; status: string; verified: boolean; matched_fields: string[]; identity_collected: string[]; intent: string | null; case_hints: Record<string, string | number>; selected_case_id: string | null; email_status: string; demo_date: string; pending: string | null };
+  messages: { role: 'user' | 'assistant'; content: string; turn_id: string }[];
+  events: { kind: string; phase: string; detail: string; at: string }[];
   email_summary: { subject: string; body: string; to_masked: string; status: string } | null;
 };
+type CreatedSession = Snapshot & Credentials;
 const STORAGE_KEY = 'claims-companion-session';
 const PHASES = [
   { id: 'VERIFY_ID', title: 'Verify identity', description: 'Protect customer information', icon: 'shield' },
@@ -20,7 +23,7 @@ const PHASES = [
 ] as const;
 const COMPLETE_SAMPLE = 'I’m the policyholder. My name is Margaret Chen, policy POL-9921. I’m calling about my denied healthcare claim from January. DOB is 1985-03-15, SSN last four is 4472.';
 const PARTIAL_SAMPLE = 'My name is Margaret Chen. I’m calling about my denied healthcare claim from January, but I don’t want to share my SSN.';
-const LABELS: Record<string, string> = { name: 'Full name', full_name: 'Full name', dob: 'Date of birth', date_of_birth: 'Date of birth', phone: 'Phone', email: 'Email', ssn_last4: 'SSN last four', id_last4: 'ID last four', policy_number: 'Policy number' };
+const LABELS: Record<string, string> = { name: 'Full name', dob: 'Date of birth', phone: 'Phone', email: 'Email', ssn_last4: 'SSN last four' };
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -38,16 +41,19 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></>,
     refresh: <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></>,
   };
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] || paths.file}</svg>;
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 async function api<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `The request could not be completed (${response.status}). Please try again.`);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.detail);
   return body as T;
 }
-function display(value: unknown): string { return typeof value === 'string' ? value.replaceAll('_', ' ') : JSON.stringify(value); }
-function savedCredentials(): Credentials | null { try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null'); } catch { return null; } }
+function display(value: string | number): string { return String(value).replaceAll('_', ' '); }
+function savedCredentials(): Credentials | null {
+  const saved = sessionStorage.getItem(STORAGE_KEY);
+  return saved ? JSON.parse(saved) : null;
+}
 
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
@@ -61,9 +67,9 @@ export default function App() {
   const [modal, setModal] = useState(false);
   const [tab, setTab] = useState<'overview' | 'activity'>('overview');
   const [apiKey, setApiKey] = useState('');
+  const [apiProtocol, setApiProtocol] = useState<ApiProtocol>('openai');
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
-  const [mode, setMode] = useState<Mode>('offline');
   const [modelBusy, setModelBusy] = useState(false);
   const [modelError, setModelError] = useState('');
   const [modelMessage, setModelMessage] = useState('');
@@ -71,15 +77,13 @@ export default function App() {
   const bottom = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
-  const pendingTurn = useRef<{ message: string; turn_id: string } | null>(null);
+  const pendingTurn = useRef<OutgoingTurn | null>(null);
 
-  function retainSession(data: Snapshot) {
+  function retainSession(data: CreatedSession) {
     setSnapshot(data);
-    if (data.access_token) {
-      const saved = { session_id: data.session_id, access_token: data.access_token };
-      setCredentials(saved);
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
-    }
+    const saved = { session_id: data.session_id, access_token: data.access_token };
+    setCredentials(saved);
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
   }
   useEffect(() => {
     if (started.current) return;
@@ -87,14 +91,15 @@ export default function App() {
     (async () => {
       try {
         const defaults = await api<Config>('/api/config');
-        setConfig(defaults); setBaseUrl(defaults.base_url || ''); setModel(defaults.model || '');
+        setConfig(defaults); setApiProtocol(defaults.api_protocol); setBaseUrl(defaults.base_url ?? ''); setModel(defaults.model ?? '');
         const saved = savedCredentials();
         if (saved) {
-          try { const existing = await api<Snapshot>(`/api/sessions/${saved.session_id}`, {}, saved.access_token); setCredentials(saved); setSnapshot(existing); return; }
-          catch { sessionStorage.removeItem(STORAGE_KEY); }
+          const existing = await api<Snapshot>(`/api/sessions/${saved.session_id}`, {}, saved.access_token);
+          setCredentials(saved); setSnapshot(existing);
+        } else {
+          retainSession(await api<CreatedSession>('/api/sessions', { method: 'POST', body: JSON.stringify({}) }));
         }
-        retainSession(await api<Snapshot>('/api/sessions', { method: 'POST', body: JSON.stringify({ mode: 'offline' }) }));
-      } catch (e) { setError(e instanceof Error ? e.message : 'Could not reach the local server.'); }
+      } catch (e) { setError((e as Error).message); }
       finally { setBooting(false); }
     })();
   }, []);
@@ -105,106 +110,129 @@ export default function App() {
     if (busy || modelBusy) return;
     setBusy(true); setError(''); setInput(''); pendingTurn.current = null;
     try {
-      retainSession(await api<Snapshot>('/api/sessions', { method: 'POST', body: JSON.stringify({ mode: 'offline' }) }));
-      setNotice('New conversation started in offline fixture mode. Connect a model for natural language testing.');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not start a conversation.'); }
+      const next = await api<CreatedSession>('/api/sessions', { method: 'POST', body: JSON.stringify({}) });
+      retainSession(next);
+      setNotice(next.model_configured ? 'New conversation started with the configured server model.' : 'New conversation created. Connect your AI model to start chatting.');
+    } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
-  async function send(message = input) {
+  async function send(message = input, callerAction?: CallerAction) {
     const clean = message.trim();
-    if (!clean || busy || !credentials) return;
+    if (!clean || busy || modelBusy || !snapshot?.model_configured) return;
+    const session = credentials!;
     setBusy(true); setError(''); setNotice('');
-    const payload = pendingTurn.current?.message === clean ? pendingTurn.current : { message: clean, turn_id: crypto.randomUUID() };
+    const payload: OutgoingTurn = pendingTurn.current?.message === clean && pendingTurn.current.caller_action === callerAction
+      ? pendingTurn.current
+      : { message: clean, turn_id: crypto.randomUUID(), ...(callerAction ? { caller_action: callerAction } : {}) };
     pendingTurn.current = payload;
     try {
-      const next = await api<Snapshot>(`/api/sessions/${credentials.session_id}/messages`, { method: 'POST', body: JSON.stringify(payload) }, credentials.access_token);
+      const next = await api<Snapshot>(`/api/sessions/${session.session_id}/messages`, { method: 'POST', body: JSON.stringify(payload) }, session.access_token);
       setSnapshot(next); setInput(''); pendingTurn.current = null;
-    } catch (e) { setError(e instanceof Error ? e.message : 'Message could not be sent.'); setInput(clean); }
+    } catch (e) {
+      setError((e as Error).message); setInput(clean);
+      // Refresh the server-reported model configuration after a failed turn.
+      try { setSnapshot(await api<Snapshot>(`/api/sessions/${session.session_id}`, {}, session.access_token)); }
+      catch (refreshError) { setError((refreshError as Error).message); }
+    }
     finally { setBusy(false); textarea.current?.focus(); }
   }
   function openSettings() {
-    setMode(snapshot?.state.model_mode || 'offline'); setModelError(''); setModelMessage(''); setApiKey(''); setModal(true);
+    setModelError(''); setModelMessage(''); setApiKey(''); setModal(true);
   }
   function closeSettings() { if (!modelBusy) { setApiKey(''); setModal(false); } }
   async function modelAction(testOnly = false) {
-    if (!credentials || modelBusy) return;
-    if ((mode === 'live' || testOnly) && !model.trim()) { setModelError('Enter the model name provided by your API service.'); return; }
+    if (modelBusy || busy) return;
+    const session = credentials!;
     setModelBusy(true); setModelError(''); setModelMessage('');
-    const payload = { mode: testOnly ? 'live' : mode, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}), ...(baseUrl.trim() ? { base_url: baseUrl.trim() } : {}), ...(model.trim() ? { model: model.trim() } : {}) };
+    const payload = { api_protocol: apiProtocol, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}), ...(baseUrl.trim() ? { base_url: baseUrl.trim() } : {}), ...(model.trim() ? { model: model.trim() } : {}) };
     try {
       if (testOnly) {
-        const result = await api<{ ok: boolean; message: string }>('/api/models/test', { method: 'POST', body: JSON.stringify(payload) });
-        if (!result.ok) throw new Error(result.message);
+        const result = await api<{ message: string }>('/api/models/test', { method: 'POST', body: JSON.stringify(payload) });
         setModelMessage(`${result.message} You can now apply it to this session.`);
       } else {
-        const next = mode === 'offline'
-          ? await api<Snapshot>(`/api/sessions/${credentials.session_id}/model`, { method: 'DELETE' }, credentials.access_token)
-          : await api<Snapshot>(`/api/sessions/${credentials.session_id}/model`, { method: 'POST', body: JSON.stringify(payload) }, credentials.access_token);
-        setSnapshot(next); setModal(false); setNotice(mode === 'live' ? 'Live model connected to this session.' : 'Session key cleared. Offline fixture mode is active.');
+        const next = await api<Snapshot>(`/api/sessions/${session.session_id}/model`, { method: 'POST', body: JSON.stringify(payload) }, session.access_token);
+        setSnapshot(next); setModal(false); setNotice('AI model configured for this session. You can start chatting.');
       }
-    } catch (e) { setModelError(e instanceof Error ? e.message : 'Could not configure the model.'); }
+    } catch (e) { setModelError((e as Error).message); }
     finally { if (!testOnly) setApiKey(''); setModelBusy(false); }
+  }
+  async function disconnectModel() {
+    if (modelBusy || busy) return;
+    const session = credentials!;
+    setModelBusy(true); setModelError(''); setModelMessage('');
+    try {
+      setSnapshot(await api<Snapshot>(`/api/sessions/${session.session_id}/model`, { method: 'DELETE' }, session.access_token));
+      setModal(false); setNotice('Model disconnected and temporary credentials cleared. Reconnect to continue this conversation.');
+    } catch (e) { setModelError((e as Error).message); }
+    finally { setApiKey(''); setModelBusy(false); }
+  }
+  function changeProtocol(value: ApiProtocol) {
+    setApiProtocol(value); setBaseUrl(config!.protocol_base_urls[value]);
+    setModel(''); setApiKey(''); setModelError(''); setModelMessage('');
   }
   function fillSample(value: string) { setInput(value); textarea.current?.focus(); }
   const state = snapshot?.state;
   const phaseIndex = PHASES.findIndex(p => p.id === state?.phase);
-  const isLive = state?.model_mode === 'live';
-  const isClosed = !!state && ['completed', 'complete', 'closed', 'ended', 'handoff', 'handoff_requested', 'transferred', 'cancelled'].includes(state.status?.toLowerCase());
-  const identityFields = [...new Set([...(state?.identity_collected || []), ...(state?.matched_fields || [])])];
-  const hints = Object.entries(state?.case_hints || {}).filter(([, value]) => value !== null && value !== '' && value !== undefined);
+  const modelConfigured = snapshot ? snapshot.model_configured : false;
+  const canChat = modelConfigured && !busy && !modelBusy;
+  const isClosed = state?.status === 'completed' || state?.status === 'handoff_requested';
+  const identityFields = state ? state.identity_collected : [];
+  const matchedFields = state ? state.matched_fields : [];
+  const hints = state ? Object.entries(state.case_hints) : [];
+  const messages = snapshot ? snapshot.messages : [];
+  const events = snapshot ? snapshot.events : [];
 
   return <div className="app-shell">
     <header className="topbar">
       <a className="brand" href="#" onClick={e => e.preventDefault()} aria-label="Claims Companion home"><span className="brand-mark"><Icon name="shield" size={25}/></span><span>Claims Companion<small>INSURANCE SUPPORT · SOP DEMO</small></span></a>
-      <div className="header-actions"><span className="local-badge"><span/> Local workspace</span><button className="button subtle" aria-label="Model settings" onClick={openSettings} disabled={booting || !credentials}><Icon name="key" size={17}/><span>Model settings</span></button><button className="button new-button" aria-label="New conversation" onClick={newSession} disabled={busy || booting}><Icon name="plus" size={17}/><span>New conversation</span></button></div>
+      <div className="header-actions"><span className="local-badge"><span/> Local workspace</span><button className="button subtle" aria-label="Model settings" onClick={openSettings} disabled={booting || busy || !credentials}><Icon name="key" size={17}/><span>Model settings</span></button><button className="button new-button" aria-label="New conversation" onClick={newSession} disabled={busy || booting || !config}><Icon name="plus" size={17}/><span>New conversation</span></button></div>
     </header>
     <main className="workspace">
       <section className="conversation-panel" aria-label="Customer conversation">
         <div className="conversation-heading"><div><div className="eyebrow">A LITTLE CLARITY GOES A LONG WAY</div><h1>Let’s work through your claim.</h1><p>A natural conversation. A protected, step-by-step process.</p></div><span className="conversation-emblem"><Icon name="spark" size={27}/></span></div>
-        <div className={`mode-banner ${isLive ? 'live' : ''}`}><Icon name={isLive ? 'spark' : 'info'} size={16}/><span>{isLive ? 'Live AI model · business rules enforced by the server' : 'Offline fixture mode — deterministic, not an LLM'}</span>{!isLive && <button onClick={openSettings} disabled={!credentials}>Connect model <Icon name="arrow" size={13}/></button>}</div>
+        <div className={`connection-banner ${modelConfigured || isClosed ? 'configured' : ''}`}><Icon name={isClosed ? 'check' : modelConfigured ? 'spark' : 'key'} size={16}/><span>{isClosed ? state?.status === 'handoff_requested' ? 'Conversation closed · simulated human support requested' : 'Conversation complete · start a new conversation whenever you’re ready' : booting ? 'Preparing your model connection…' : modelConfigured ? 'AI model configured · business rules enforced by the server' : 'Connect an AI model before starting the conversation.'}</span>{!modelConfigured && !isClosed && <button onClick={openSettings} disabled={booting || !credentials}>Configure model <Icon name="arrow" size={13}/></button>}</div>
         <div className="messages" role="log" aria-label="Conversation messages" aria-live="polite">
           {booting && <div className="welcome-state"><div className="loading-dots"><i/><i/><i/></div><p>Preparing your local workspace…</p></div>}
-          {!booting && !snapshot?.messages.length && <div className="welcome-state"><span className="welcome-icon"><Icon name="shield" size={28}/></span><h2>Claim support, with care.</h2><p>We’ll verify your identity first, then help you understand your claim and next steps.</p></div>}
-          {snapshot?.messages.map((message, index) => <div className={`message-row ${message.role}`} key={`${message.turn_id || index}-${message.role}`}>
+          {!booting && !messages.length && <div className="welcome-state"><span className="welcome-icon"><Icon name="shield" size={28}/></span><h2>Claim support, with care.</h2><p>We’ll verify your identity first, then help you understand your claim and next steps.</p></div>}
+          {messages.map((message) => <div className={`message-row ${message.role}`} key={`${message.turn_id}-${message.role}`}>
             {message.role === 'assistant' && <span className="avatar"><Icon name="shield" size={18}/></span>}
             <div className="message-body"><div className="message-label">{message.role === 'assistant' ? 'Claims Companion' : 'You'}</div><div className="bubble">{message.content}</div></div>
           </div>)}
           {busy && <div className="message-row assistant"><span className="avatar"><Icon name="shield" size={18}/></span><div className="bubble thinking"><span className="loading-dots"><i/><i/><i/></span><span>Working through the next step</span></div></div>}
-          {snapshot?.email_summary && <div className="email-preview"><div className="preview-label"><Icon name="mail" size={16}/><strong>Email summary</strong><span className="badge amber">MOCK EMAIL</span></div><h3>{snapshot.email_summary.subject}</h3><p className="email-meta">To: {snapshot.email_summary.to_masked || 'Verified email'} · {display(snapshot.email_summary.status)}</p><div className="email-body">{snapshot.email_summary.body}</div><small>This demo does not deliver email to a real inbox.</small></div>}
+          {snapshot?.email_summary && <div className="email-preview"><div className="preview-label"><Icon name="mail" size={16}/><strong>Email summary</strong><span className="badge amber">MOCK EMAIL</span></div><h3>{snapshot.email_summary.subject}</h3><p className="email-meta">To: {snapshot.email_summary.to_masked} · {display(snapshot.email_summary.status)}</p><div className="email-body">{snapshot.email_summary.body}</div><small>This demo does not deliver email to a real inbox.</small></div>}
           <div ref={bottom}/>
         </div>
         <div className="composer-area">
           {notice && <div className="notice" role="status"><Icon name="check" size={15}/><span>{notice}</span><button aria-label="Dismiss notice" onClick={() => setNotice('')}><Icon name="close" size={14}/></button></div>}
-          {error && <div className="error-banner" role="alert"><span>{error}</span>{!credentials ? <button onClick={() => window.location.reload()}>Retry</button> : pendingTurn.current ? <button onClick={() => send(pendingTurn.current!.message)} disabled={busy}>Retry message</button> : <button onClick={() => setError('')}>Dismiss</button>}</div>}
-          {state?.phase === 'POST_PROCESS' && !isClosed && <div className="action-choices"><button className="button primary" disabled={busy} onClick={() => send('Yes, send the email summary to my verified email.')}><Icon name="mail" size={16}/>Send mock email</button><button className="button subtle" disabled={busy} onClick={() => send('Skip the email.')}>Skip email</button></div>}
-          {state?.phase === 'PROCESS_CASE' && !isClosed && <div className="action-choices"><button className="chip" disabled={busy} onClick={() => send('That is all, please summarize.')}>I’m all set — wrap up <Icon name="arrow" size={14}/></button></div>}
-          {(!state || state.phase === 'VERIFY_ID') && !isClosed && <div className="sample-row"><span>TRY A SCENARIO</span><button className="chip" onClick={() => fillSample(COMPLETE_SAMPLE)} disabled={busy}>Complete identity <Icon name="plus" size={13}/></button><button className="chip" onClick={() => fillSample(PARTIAL_SAMPLE)} disabled={busy}>Partial answer & refusal <Icon name="plus" size={13}/></button></div>}
-          {isClosed ? <div className="closed-state"><Icon name="check" size={18}/><span>{['handoff', 'handoff_requested'].includes(state?.status || '') ? 'This conversation has been prepared for human support.' : 'This conversation has ended.'}</span><button onClick={newSession}>Start a new one</button></div> : <form className="composer" onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }}>
-            <label className="sr-only" htmlFor="message">Your message</label><textarea id="message" ref={textarea} value={input} onChange={e => setInput(e.target.value)} placeholder="Tell us what you need help with…" rows={2} maxLength={4000} disabled={booting || busy || !credentials} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><button type="submit" className="send-button" aria-label="Send message" disabled={!input.trim() || busy || booting || !credentials}><Icon name="send" size={20}/></button>
+          {error && <div className="error-banner" role="alert"><span>{error}</span>{!credentials ? <button onClick={() => window.location.reload()}>Retry</button> : pendingTurn.current ? <button onClick={() => send(pendingTurn.current!.message, pendingTurn.current!.caller_action)} disabled={!canChat}>Retry message</button> : <button onClick={() => setError('')}>Dismiss</button>}</div>}
+          {state?.phase === 'POST_PROCESS' && !isClosed && <div className="action-choices"><button className="button primary" disabled={!canChat} onClick={() => send('Yes, send the email summary to my verified email.', 'send_summary')}><Icon name="mail" size={16}/>Send mock email</button><button className="button subtle" disabled={!canChat} onClick={() => send('Skip the email.', 'skip_summary')}>Skip email</button></div>}
+          {state?.phase === 'PROCESS_CASE' && !isClosed && <div className="action-choices"><button className="chip" disabled={!canChat} onClick={() => send('That is all, please summarize.', 'finish_case')}>I’m all set — wrap up <Icon name="arrow" size={14}/></button></div>}
+          {(!state || state.phase === 'VERIFY_ID') && !isClosed && <div className="sample-row"><span>TRY A SCENARIO</span><button className="chip" onClick={() => fillSample(COMPLETE_SAMPLE)} disabled={!canChat}>Complete identity <Icon name="plus" size={13}/></button><button className="chip" onClick={() => fillSample(PARTIAL_SAMPLE)} disabled={!canChat}>Partial answer & refusal <Icon name="plus" size={13}/></button></div>}
+          {isClosed ? <div className="closed-state"><Icon name="check" size={18}/><span>{state?.status === 'handoff_requested' ? 'This conversation has been prepared for human support.' : 'This conversation has ended.'}</span><button onClick={newSession}>Start a new one</button></div> : <form className="composer" onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }}>
+            <label className="sr-only" htmlFor="message">Your message</label><textarea id="message" ref={textarea} value={input} onChange={e => setInput(e.target.value)} placeholder={modelConfigured ? "Tell us what you need help with…" : "Configure your AI model to start chatting…"} rows={2} disabled={!canChat} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><button type="submit" className="send-button" aria-label="Send message" disabled={!input.trim() || !canChat}><Icon name="send" size={20}/></button>
           </form>}
           <div className="composer-footer"><span><Icon name="shield" size={12}/> Synthetic customer data · use demo identities only</span><span>Enter to send · Shift + Enter for a new line</span></div>
         </div>
       </section>
       <aside className="inspector" aria-label="Read-only workflow inspector">
         <div className="inspector-header"><div><div className="eyebrow">BEHIND THE CONVERSATION</div><h2>Workflow, made visible.</h2></div><span className="read-only">Read only</span></div>
-        <div className="inspector-tabs" role="tablist" aria-label="Workflow information"><button role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={tab === 'overview' ? 'active' : ''}>Overview</button><button role="tab" aria-selected={tab === 'activity'} onClick={() => setTab('activity')} className={tab === 'activity' ? 'active' : ''}>Activity <span>{snapshot?.events.length || 0}</span></button></div>
+        <div className="inspector-tabs" role="tablist" aria-label="Workflow information"><button role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={tab === 'overview' ? 'active' : ''}>Overview</button><button role="tab" aria-selected={tab === 'activity'} onClick={() => setTab('activity')} className={tab === 'activity' ? 'active' : ''}>Activity <span>{events.length}</span></button></div>
         <div className="inspector-content">
           {tab === 'overview' ? <>
-            <section className="inspector-section"><div className="section-heading"><h3>THE FOUR-STEP SOP</h3><span className="badge purple">{phaseIndex >= 0 ? `${phaseIndex + 1} OF 4` : 'READY'}</span></div><ol className="phase-list">{PHASES.map((phase, index) => <li key={phase.id} className={`${index === phaseIndex ? 'current' : ''} ${index < phaseIndex ? 'done' : ''}`} aria-current={index === phaseIndex ? 'step' : undefined}><span className="phase-node"><Icon name={index < phaseIndex ? 'check' : phase.icon} size={18}/></span><div><strong>{phase.title}</strong><p>{phase.description}</p>{index === phaseIndex && <span className="current-label">{isClosed ? display(state?.status) : 'IN PROGRESS'}</span>}</div></li>)}</ol></section>
-            <section className="inspector-section identity-section"><div className="section-heading"><h3>IDENTITY CHECK</h3><span className={`badge ${state?.verified ? 'green' : 'neutral'}`}>{state?.verified ? 'VERIFIED' : 'PROTECTED'}</span></div><div className="identity-number"><strong>{Math.min(state?.matched_fields.length || 0, 3)}<span> / 3</span></strong><span>distinct fields matched</span></div><div className="identity-bars" aria-label={`${state?.matched_fields.length || 0} of 3 identity fields matched`}>{[0, 1, 2].map(i => <span key={i} className={(state?.matched_fields.length || 0) > i ? 'filled' : ''}/>)}</div><p className="muted-note">Claim details stay protected until identity is verified.</p>{identityFields.length > 0 && <div className="field-chips">{identityFields.map(field => <span key={field}><Icon name={state?.matched_fields.includes(field) ? 'check' : 'file'} size={12}/>{LABELS[field] || display(field)}</span>)}</div>}</section>
-            <section className="inspector-section"><div className="section-heading"><h3>CONVERSATION MEMORY</h3><Icon name="file" size={16}/></div><p className="muted-note">Useful context is remembered across steps. Identity values are hidden.</p><dl className="memory-list"><div><dt>Intent</dt><dd>{state?.intent ? display(state.intent) : 'Not established yet'}</dd></div><div><dt>Selected case</dt><dd>{state?.selected_case_id || 'Waiting for a verified match'}</dd></div>{hints.map(([key, value]) => <div key={key}><dt>{display(key)}</dt><dd>{display(value)}</dd></div>)}</dl>{state?.pending && <div className="pending-note"><span>AWAITING</span>{display(state.pending)}</div>}</section>
-            <section className="inspector-section session-section"><div className="section-heading"><h3>DEMO ENVIRONMENT</h3><span className="status-dot"/></div><dl className="memory-list"><div><dt>Model mode</dt><dd>{isLive ? 'Live API' : 'Offline fixture'}</dd></div><div><dt>Business date</dt><dd>{state?.demo_date || config?.demo_date || '—'}</dd></div><div><dt>Email delivery</dt><dd>Simulated only</dd></div><div><dt>Session</dt><dd className="mono">{snapshot?.session_id.slice(0, 12) || 'Connecting…'}</dd></div></dl><p className="muted-note">The demo date keeps fixture deadlines reproducible.</p></section>
-          </> : <section className="inspector-section activity-section"><div className="section-heading"><h3>WORKFLOW EVENTS</h3><span className="badge neutral">SERVER RECORDED</span></div><p className="muted-note">A concise record of decisions and tool activity. No model chain of thought is displayed.</p>{!snapshot?.events.length && <p className="empty-events">Events will appear as the conversation progresses.</p>}<ol className="event-list">{[...(snapshot?.events || [])].reverse().map((event, i) => <li key={`${event.at}-${i}`}><span className="event-dot"/><div><div className="event-title"><strong>{display(event.kind)}</strong><time>{event.at && !Number.isNaN(Date.parse(event.at)) ? new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</time></div><p>{display(event.detail)}</p><small>{event.phase}</small></div></li>)}</ol></section>}
+            <section className="inspector-section"><div className="section-heading"><h3>THE FOUR-STEP SOP</h3><span className="badge purple">{phaseIndex >= 0 ? `${phaseIndex + 1} OF 4` : 'READY'}</span></div><ol className="phase-list">{PHASES.map((phase, index) => <li key={phase.id} className={`${index === phaseIndex ? 'current' : ''} ${index < phaseIndex ? 'done' : ''}`} aria-current={index === phaseIndex ? 'step' : undefined}><span className="phase-node"><Icon name={index < phaseIndex ? 'check' : phase.icon} size={18}/></span><div><strong>{phase.title}</strong><p>{phase.description}</p>{index === phaseIndex && <span className="current-label">{isClosed ? display(state!.status) : modelConfigured ? 'IN PROGRESS' : 'AWAITING MODEL'}</span>}</div></li>)}</ol></section>
+            <section className="inspector-section identity-section"><div className="section-heading"><h3>IDENTITY CHECK</h3><span className={`badge ${state?.verified ? 'green' : 'neutral'}`}>{state?.verified ? 'VERIFIED' : 'PROTECTED'}</span></div><div className="identity-number"><strong>{Math.min(matchedFields.length, 3)}<span> / 3</span></strong><span>distinct fields matched</span></div><div className="identity-bars" aria-label={`${matchedFields.length} of 3 identity fields matched`}>{[0, 1, 2].map(i => <span key={i} className={(matchedFields.length) > i ? 'filled' : ''}/>)}</div><p className="muted-note">Claim details stay protected until identity is verified.</p>{identityFields.length > 0 && <div className="field-chips">{identityFields.map(field => <span key={field}><Icon name={matchedFields.includes(field) ? 'check' : 'file'} size={12}/>{LABELS[field]}</span>)}</div>}</section>
+            <section className="inspector-section"><div className="section-heading"><h3>CONVERSATION MEMORY</h3><Icon name="file" size={16}/></div><p className="muted-note">Useful context is remembered across steps. Identity values are hidden.</p><dl className="memory-list"><div><dt>Intent</dt><dd>{state?.intent ? display(state.intent) : 'Not established yet'}</dd></div><div><dt>Selected case</dt><dd>{state?.selected_case_id ?? 'Waiting for a verified match'}</dd></div>{hints.map(([key, value]) => <div key={key}><dt>{display(key)}</dt><dd>{display(value)}</dd></div>)}</dl>{state?.pending && <div className="pending-note"><span>AWAITING</span>{display(state.pending)}</div>}</section>
+            <section className="inspector-section session-section"><div className="section-heading"><h3>DEMO ENVIRONMENT</h3><span className="status-dot"/></div><dl className="memory-list"><div><dt>Model connection</dt><dd>{modelConfigured ? 'Configured' : 'Not configured'}</dd></div><div><dt>Business date</dt><dd>{state ? state.demo_date : '—'}</dd></div><div><dt>Email delivery</dt><dd>Simulated only</dd></div><div><dt>Session</dt><dd className="mono">{snapshot ? snapshot.session_id.slice(0, 12) : 'Connecting…'}</dd></div></dl><p className="muted-note">The demo date keeps fixture deadlines reproducible.</p></section>
+          </> : <section className="inspector-section activity-section"><div className="section-heading"><h3>WORKFLOW EVENTS</h3><span className="badge neutral">SERVER RECORDED</span></div><p className="muted-note">A concise record of decisions and tool activity. No model chain of thought is displayed.</p>{!events.length && <p className="empty-events">Events will appear as the conversation progresses.</p>}<ol className="event-list">{events.slice().reverse().map((event, i) => <li key={`${event.at}-${i}`}><span className="event-dot"/><div><div className="event-title"><strong>{display(event.kind)}</strong><time>{new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div><p>{display(event.detail)}</p><small>{event.phase}</small></div></li>)}</ol></section>}
         </div>
         <div className="inspector-bottom"><Icon name="shield" size={15}/><span>Natural language. Explicit boundaries.</span></div>
       </aside>
     </main>
     <dialog ref={dialog} className="settings-dialog" onCancel={e => { e.preventDefault(); closeSettings(); }} onClick={e => { if (e.target === e.currentTarget) closeSettings(); }}>
-      <div className="dialog-content"><div className="dialog-header"><span className="settings-icon"><Icon name="key" size={23}/></span><button className="icon-button" onClick={closeSettings} aria-label="Close model settings" disabled={modelBusy}><Icon name="close"/></button></div><div className="eyebrow">YOUR MODEL, YOUR WORKSPACE</div><h2>Connect the conversation.</h2><p className="dialog-intro">Use an OpenAI-compatible API for natural language testing, or explore the fixed demo offline.</p>
-        <div className="mode-selector"><button className={mode === 'offline' ? 'selected' : ''} onClick={() => setMode('offline')} disabled={modelBusy}><strong>Offline fixture</strong><span>No key needed · deterministic</span></button><button className={mode === 'live' ? 'selected' : ''} onClick={() => setMode('live')} disabled={modelBusy}><strong>Live AI model</strong><span>Your OpenAI-compatible API</span></button></div>
-        {mode === 'live' ? <div className="settings-fields"><label>API base URL<input type="url" value={baseUrl} placeholder="https://api.openai.com/v1" onChange={e => setBaseUrl(e.target.value)} autoComplete="off" disabled={modelBusy}/><small>Use the API base address, including /v1 when required.</small></label><label>Model name<input value={model} placeholder="Enter a model supported by your provider" onChange={e => setModel(e.target.value)} autoComplete="off" disabled={modelBusy}/></label><label>API key <span className="optional">{config?.configured ? 'Server default available' : 'Required unless already configured'}</span><input type="password" value={apiKey} placeholder="Paste your API key" onChange={e => setApiKey(e.target.value)} autoComplete="off" spellCheck={false} disabled={modelBusy}/></label><div className="privacy-note"><Icon name="shield" size={17}/><p>Your key is submitted to the backend and cleared from this form when applied or closed. It is never saved in browser storage. Live mode sends relevant conversation context to your model provider.</p></div></div> : <div className="offline-explanation"><Icon name="info" size={20}/><p><strong>This mode does not use an LLM.</strong> It exercises the same SOP gates with deterministic fixture handling. Switch to a live model to evaluate natural language flexibility. Selecting offline clears this session’s model key.</p></div>}
+      <div className="dialog-content"><div className="dialog-header"><span className="settings-icon"><Icon name="key" size={23}/></span><button className="icon-button" onClick={closeSettings} aria-label="Close model settings" disabled={modelBusy}><Icon name="close"/></button></div><div className="eyebrow">YOUR MODEL, YOUR WORKSPACE</div><h2>Connect the conversation.</h2><p className="dialog-intro">Configure an OpenAI-compatible or Anthropic API to start chatting. Your session uses the model you choose.</p>
+        <div className="settings-fields"><label>API protocol<select value={apiProtocol} onChange={e => changeProtocol(e.target.value as ApiProtocol)} disabled={modelBusy}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic (Claude)</option></select></label><label>API base URL<input type="url" value={baseUrl} placeholder="Enter your provider’s API base URL" onChange={e => setBaseUrl(e.target.value)} autoComplete="off" disabled={modelBusy}/><small>Use the API base address, including /v1 when required. A different protocol or endpoint requires your own key.</small></label><label>Model name<input value={model} placeholder="Enter a model supported by your provider" onChange={e => setModel(e.target.value)} autoComplete="off" disabled={modelBusy}/></label><label>API key <span className="optional">{config?.configured && apiProtocol === config.api_protocol ? 'Server default available' : 'Your provider’s API key'}</span><input type="password" value={apiKey} placeholder="Paste your API key" onChange={e => setApiKey(e.target.value)} autoComplete="off" spellCheck={false} disabled={modelBusy}/></label><div className="privacy-note"><Icon name="shield" size={17}/><p>Your key is submitted to the backend and cleared from this form when applied or closed. It is never saved in browser storage. Relevant conversation context is sent to your model provider.</p></div></div>
         {modelError && <div className="error-banner" role="alert">{modelError}</div>}{modelMessage && <div className="notice" role="status">{modelMessage}</div>}
-        <div className="dialog-footer">{mode === 'live' && <button className="button subtle" disabled={modelBusy} onClick={() => modelAction(true)}><Icon name="refresh" size={16}/>Test connection</button>}<button className="button primary" disabled={modelBusy} onClick={() => modelAction()}>{modelBusy ? 'Connecting…' : mode === 'live' ? 'Use live model' : 'Use offline mode'}<Icon name="arrow" size={17}/></button></div>
+        <div className="dialog-footer">{modelConfigured && <button className="button subtle disconnect-button" disabled={modelBusy} onClick={disconnectModel}>Disconnect</button>}<button className="button subtle" disabled={modelBusy} onClick={() => modelAction(true)}><Icon name="refresh" size={16}/>Test connection</button><button className="button primary" disabled={modelBusy} onClick={() => modelAction()}>{modelBusy ? 'Working…' : 'Apply model'}<Icon name="arrow" size={17}/></button></div>
       </div>
     </dialog>
   </div>;

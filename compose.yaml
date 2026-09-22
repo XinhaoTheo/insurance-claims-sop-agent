@@ -8,8 +8,9 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       DATABASE_PATH: /data/insurance.db
+      MODEL_API_PROTOCOL: ${MODEL_API_PROTOCOL:-}
       MODEL_API_KEY: ${MODEL_API_KEY:-}
-      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
       MODEL_NAME: ${MODEL_NAME:-}
       DEMO_DATE: ${DEMO_DATE:-}
       SIMULATE_EMAIL_FAILURE: ${SIMULATE_EMAIL_FAILURE:-false}
