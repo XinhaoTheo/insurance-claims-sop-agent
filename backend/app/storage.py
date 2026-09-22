@@ -28,9 +28,7 @@ class Store:
             """)
 
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=15)
-        db.execute("PRAGMA busy_timeout=15000")
-        return db
+        return sqlite3.connect(self.path, timeout=15)
 
     @staticmethod
     def digest(text: str):
@@ -62,6 +60,6 @@ class Store:
             db.execute("UPDATE sessions SET snapshot=? WHERE id=?", (json.dumps(snapshot), session_id))
             if turn_id is not None:
                 db.execute("INSERT INTO turns VALUES (?, ?, ?, ?)", (session_id, turn_id, self.digest(message), json.dumps(response)))
-            summary = snapshot.get("email_summary")
-            if summary and summary.get("status") == "simulated_sent":
+            summary = snapshot["email_summary"]
+            if summary and summary["status"] == "simulated_sent":
                 db.execute("INSERT OR IGNORE INTO email_outbox VALUES (?, ?, ?, ?)", (session_id, summary["version"], json.dumps(summary), "simulated_sent"))
