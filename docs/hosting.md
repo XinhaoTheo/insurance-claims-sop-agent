@@ -1,65 +1,40 @@
-# Hosted demo
+# Hosting
 
-The hosted demo uses the same Docker image, React UI, FastAPI backend, and SOP workflow as the local version. Use one service instance and one worker. SQLite lives at `/data/insurance.db`; no separate database service is required.
+**[Live demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** · Render Free · branch `feat/hosted-demo`
 
-**Render Free is the selected target for the first public deployment.** Select `feat/hosted-demo` while hosted support is under development; use `main` after it is merged. Deployment begins when you create a service in your own hosting account.
+The cloud and local versions use the same Dockerfile, UI, API, and SOP. Run one instance with one worker. SQLite is created at `/data/insurance.db`; no separate database service is needed.
 
-## Hosting options
+## Deploy on Render
 
-Prices checked on September 22, 2026. Model API charges are separate.
+1. Push the application and root `render.yaml` to GitHub.
+2. In Render, choose **New → Blueprint**, connect the repository, and select `feat/hosted-demo`.
+3. Review the Blueprint: one Docker web service on the Free plan, no disk or paid database, health check `/health`.
+4. Add `MODEL_API_KEY` in the service's **Environment** settings. The Blueprint supplies `openai`, the official endpoint, and `gpt-5.4-mini`; change these if needed.
+5. Save and deploy. Open the generated HTTPS URL once the deployment is live.
 
-| Option | Hosting cost | Storage and availability |
-| --- | --- | --- |
-| **Render Free — selected** | **$0** within free usage limits | No persistent disk. Sleeps after 15 idle minutes; waking takes about one minute. Conversations disappear on sleep, restart, or redeploy. |
-| Railway Hobby | $5/month minimum, including $5 of resource usage; extra usage is billed | Optional paid alternative with a persistent SQLite volume. Keep Serverless disabled for immediate access. |
-| Render paid | $7/month compute + $0.25/month for a 1 GB disk = **$7.25/month** before extras | Persistent SQLite and no free-tier idle sleep. Current compute plan ID: `0.5c-512mb`. |
+Keep keys in Render environment settings, never in Git or `render.yaml`. Model usage is billed to the key owner. With the server key configured, visitors can chat immediately and model settings are hidden.
 
-Render Free runs the complete workflow without a separate database service. Its temporary storage is suitable for disposable demo conversations. [Render pricing](https://render.com/pricing), [free service limits](https://render.com/docs/free).
+Subsequent pushes to the connected branch trigger deployments. Check **Deploys**, **Logs**, and `/health` when diagnosing startup failures.
 
-## Render Free: first deployment
+## Storage and model settings
 
-1. Open the GitHub repository and confirm that the selected branch contains `render.yaml`.
-2. In Render, choose **New → Blueprint**, connect the repository, select `feat/hosted-demo`, and use the root `render.yaml` file.
-3. Review the configuration: one Docker web service on the **Free** compute plan, with no paid database or disk. Create the Blueprint.
-4. Wait for the deployment to become healthy, then open its generated `onrender.com` URL.
-5. In Render **Environment**, add `MODEL_API_KEY` using your provider key. The Blueprint supplies the model and endpoint defaults. Save and redeploy; visitors can then chat immediately. Model usage is billed to the operator. Keep the real key out of `render.yaml` and Git.
+| Setting | Behavior |
+| --- | --- |
+| `HOSTED_DEMO=true` | Enable hosted endpoint restrictions and the shared limit of 60 API POST requests per minute. |
+| `MODEL_API_KEY` | Fund visitor chats with the server model. If absent, visitors configure their own credentials. |
+| `MODEL_API_PROTOCOL`, `MODEL_NAME`, `MODEL_BASE_URL` | Select the protocol, model, and API root. A blank URL uses the protocol's official endpoint. |
+| `HOSTED_MODEL_BASE_URLS` | Optional comma-separated endpoint allowlist. Defaults to the official OpenAI and Anthropic roots. |
+| `DATABASE_PATH=/data/insurance.db` | SQLite location. |
+| `PORT` | HTTP port used by the container entrypoint. |
 
-The Blueprint enables `HOSTED_DEMO=true` and checks `/health`. Render provides HTTPS. After a free instance sleeps or restarts, its SQLite database is recreated. If the browser tries to reopen a conversation that no longer exists, the UI recovers by starting a new one; the server-provided model is available automatically. If no server key is configured, visitors must reconnect their own model.
+Visitor keys stay in backend memory and expire after one hour; a restart requires reconnection. Server-configured keys remain available. Hosted mode with a server key rejects visitor model overrides.
 
-To keep conversations later, switch to the paid `0.5c-512mb` plan and add a 1 GB disk mounted at `/data`. This changes the hosting cost to approximately $7.25/month before extras. [Blueprint configuration](https://render.com/docs/blueprint-spec), [disk setup](https://render.com/docs/disks).
+Render Free storage is temporary: conversations may disappear after sleep, restart, or deployment. This is intentional for the demo. An idle service may take about a minute to wake. For durable conversations, use a paid service with a disk mounted at `/data`; check [Render's current plans](https://render.com/pricing) before upgrading.
 
-## Optional: Railway with persistent storage
+## Optional: Railway
 
-Railway's $5 is a minimum bill, not a fixed maximum. For example, $3 of monthly resource usage costs $5; $8 costs $8. Set a usage alert and, if desired, a $10 hard compute limit, the current minimum. Reaching that limit takes the service offline. [Railway pricing](https://railway.com/pricing), [cost controls](https://docs.railway.com/pricing/cost-control).
+Deploy the same Dockerfile with one replica, health check `/health`, and a public domain targeting port `8000`. Set the model variables above, `HOSTED_DEMO=true`, `PORT=8000`, and `DATABASE_PATH=/data/insurance.db`.
 
-1. In Railway, create a project from the GitHub repository `XinhaoTheo/insurance-claims-sop-agent`. Select the pushed `feat/hosted-demo` branch. Railway builds the repository's Dockerfile.
-2. Add these service variables:
+For persistence, mount a volume at `/data` and set `RAILWAY_RUN_UID=0`. The entrypoint prepares volume permissions, then drops to the application user. Keep the image's startup command. Check [Railway's plans](https://railway.com/pricing) before deploying.
 
-   ```dotenv
-   HOSTED_DEMO=true
-   PORT=8000
-   DATABASE_PATH=/data/insurance.db
-   RAILWAY_RUN_UID=0
-   ```
-
-   Railway mounts volumes as root. `RAILWAY_RUN_UID=0` lets the entrypoint prepare `/data`, then drop to the application's non-root user before starting FastAPI. Do not override the image's startup command.
-
-3. Add a volume attached to this service and set its mount path to `/data`. The directory created while building the image is not a substitute for a mounted volume.
-4. In deployment settings, keep **one replica**, set the healthcheck path to `/health`, and leave **Serverless disabled**. Deploy the service.
-5. In **Settings → Networking → Public Networking**, choose **Generate Domain** and use target port `8000`. Railway provides the public domain and HTTPS certificate.
-6. Open the generated URL and configure your model using the same steps as the Render setup above.
-
-A volume preserves SQLite across deployments, but a redeploy briefly stops the service and clears in-memory model credentials. Configure the model again after a restart. Optional Serverless sleeping reduces resource usage, but introduces a cold start and may return a 502 on the first wake request; it also clears temporary credentials.
-
-References: [Docker builds](https://docs.railway.com/builds/dockerfiles), [volume permissions](https://docs.railway.com/volumes#permissions), [healthchecks and ports](https://docs.railway.com/deployments/healthchecks), [public domains](https://docs.railway.com/networking/public-networking), [Serverless behavior](https://docs.railway.com/deployments/serverless).
-
-## Model settings and public access
-
-- With a server `MODEL_API_KEY`, hosted mode provides operator-funded chats. The UI hides model settings, and the API rejects visitor model overrides. The key stays in Render environment configuration and backend memory; it is never returned to browsers or stored in SQLite. All model requests use the configured operator account.
-- Without a server key, hosted mode uses visitor-owned keys and exposes the model settings form.
-- Visitor keys travel over HTTPS to the demo backend and are used there to call the selected provider. They are stored only in server memory, and the model connection expires after one hour. Expired keys are removed on a subsequent API request; disconnect, completed handoff/conversation, or restart also clears them. Keys are not written to SQLite.
-- The default allowed endpoints are `https://api.openai.com/v1` and `https://api.anthropic.com/v1`. An administrator can change the comma-separated `HOSTED_MODEL_BASE_URLS` environment variable to allow another trusted endpoint. Visitors cannot make the public backend call arbitrary URLs.
-- Hosted mode limits POST requests to 60 per minute across the whole instance. Local Docker remains configurable without this hosted limit.
-- Use the supplied synthetic customer data when trying the public demo. Email delivery and human transfers are simulated.
-
-For automated evaluation of the operator-funded demo, use `scripts/evaluate.py --server-model --base-url <HTTPS-URL>`. New sessions need no model fields or visitor API key. Visitor-key deployments still accept model settings when creating or configuring a session. The local Docker setup remains available for evaluators who prefer to run the application with their own infrastructure.
+Use [the live evaluation](testing.md#cloud-evaluation) to verify a deployment. Email and human transfers remain simulated on all hosts.

@@ -1,47 +1,60 @@
 # Testing
 
-The automated tests check SOP rules with injected model observations and mock HTTP responses. The live evaluation calls the configured model through the running application's HTTP API. Mocks are never a runtime chat mode. See [Evaluation results](evaluation-results.md) for the latest measured run.
+Automated tests use fixed model observations and mocked provider responses to check code behavior. Live evaluation calls a real model through the HTTP API. Mocks are never a runtime chat mode.
 
-## Run the live evaluation
+## Automated tests
 
-Configure `MODEL_API_PROTOCOL`, `MODEL_BASE_URL`, `MODEL_NAME`, and `MODEL_API_KEY` in the project `.env`, then start the local app:
+From the repository root, using Python 3.11 or newer:
 
 ```bash
-docker compose up --build --force-recreate -d
+python3 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.lock
+backend/.venv/bin/python -m pytest backend/tests -q
+```
+
+Build the frontend with Node.js 22:
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+## Local live evaluation
+
+Configure the model in `.env` as described in the [README](../README.md#local-setup), then run from the repository root:
+
+```bash
+docker compose up --build -d
 docker compose exec app python scripts/evaluate.py --output /tmp/live-evaluation.json
 mkdir -p test-results
 docker compose cp app:/tmp/live-evaluation.json test-results/live-evaluation.json
 ```
 
-This uses real model requests and incurs provider charges. Only the supplied synthetic customer fixtures are used. The report contains checks, assistant replies, selected workflow state, and latency; credentials, session access tokens, and raw caller messages are excluded. `test-results/` is ignored by Git.
+This uses real model requests and incurs provider charges. UI-only model settings are not passed to the evaluation script; use environment defaults.
 
-To evaluate another running instance, use the project's Python environment:
+## Cloud evaluation
 
-```bash
-backend/.venv/bin/python scripts/evaluate.py \
-  --base-url http://127.0.0.1:8001 \
-  --output test-results/hosted-evaluation.json
-```
-
-For the operator-funded public demo, add `--server-model`; no local API key is needed and the client sends no model credentials.
-
-The same command accepts your deployed HTTPS URL. Without `--server-model`, the client supplies model configuration for each session, for local or visitor-key deployments. To repeat one scenario, add `--scenario chinese_consent` or another scenario name from `--help`.
-
-## Coverage and limits
-
-- Three matching identity fields, alternate fields, incorrect inputs, and attempted gate bypass.
-- Unusable identity fields, revoked access after an unusable correction, clarification recovery, and unusable email recipients.
-- Remembered case hints, grounded follow-ups, case corrections, and case ownership.
-- Recorded payment amounts, unsupported premium questions, and expired appeal deadlines.
-- Emotional replies, repeated verification refusal, scope limits, and simulated human handoff.
-- Optional summary review, conditional consent, explicit send/skip, and idempotent retries.
-- Chinese conversation continuity after an English UI button action.
-- End-to-end message latency and a small comparison of sequential versus two concurrent sessions.
-
-Live scenarios use the historical business date `2026-03-10` for reproducible fixture deadlines, except `current_date`, which checks the deadline using today's date. Each scenario records its date in the report. Normal conversations use today's date. Email delivery and human handoff are simulated. Two concurrent sessions are a basic performance check, not a load test. Keyword and language assertions are heuristics, so inspect the saved replies as well; passing one run does not guarantee every future model response.
-
-For deterministic regression tests in an installed development environment:
+With the Python environment above, test the sponsored deployment without sending a visitor key:
 
 ```bash
-backend/.venv/bin/python -m pytest backend/tests -q
+backend/.venv/bin/python scripts/evaluate.py   --base-url https://insurance-claims-sop-agent-d5gs.onrender.com   --server-model   --output test-results/cloud-evaluation.json
 ```
+
+Replace the URL for another deployment. Omit `--server-model` to supply model settings from the local environment or `.env` on a local or visitor-key server. Add `--scenario chinese_consent` for a focused run; `--help` lists the scenarios.
+
+## Coverage
+
+The 16 scenarios cover:
+
+- Three-field verification, alternate fields, invalid corrections, and bypass attempts.
+- Remembered hints, case switching, ownership, and grounded payment information.
+- Scope rejection, emotional recovery, refusal, and simulated human support.
+- Summary review, conditional consent, invalid recipients, send/skip, and replay safety.
+- Chinese replies, current-date deadlines, and response latency.
+
+Most scenarios use `2026-03-10` to keep fixture deadlines reproducible. `current_date` uses today's date. Reports include checks, replies, workflow state, and timings; they exclude credentials, access tokens, and raw caller messages. Reports remain in the Git-ignored `test-results/` directory.
+
+Review the replies as well as the counts: keyword checks do not prove factual or translation accuracy. Two concurrent sessions are a basic timing check, not a load test. See [latest results](evaluation-results.md).
+
+For a smaller real-model smoke test, run `backend/.venv/bin/python scripts/smoke_test.py --base-url http://127.0.0.1:8000`. Add `--multilingual` to include Spanish and print replies for review. This script requires model credentials in the environment or `.env`.

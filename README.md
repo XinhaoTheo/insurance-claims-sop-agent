@@ -1,14 +1,12 @@
 # Insurance Claims SOP Agent
 
-A chat demo for an insurance claims support agent, using the same code for local Docker and hosted URLs. An LLM understands the customer and phrases replies naturally, while a code-controlled SOP handles identity verification, case selection, claim support, and optional email follow-up.
+An insurance support demo with natural conversation and a code-controlled workflow. The LLM interprets messages and writes replies; the harness controls identity verification, case access, and email consent. Useful case hints are remembered across phases.
 
-The agent requires three matching identity fields before accessing claim details and remembers useful information across workflow stages. The UI shows the conversation, current phase, saved case hints, and activity log. Customer records are synthetic; email delivery and human handoff are simulated.
+**[Open the demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** — no API key required. The owner funds model usage. The free service may need about a minute to wake.
 
-**[Open the hosted demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** · No API key needed for the hosted demo. The free service may take about a minute to wake.
+Built with React, TypeScript, FastAPI, Pydantic, and SQLite. Local Docker and the hosted demo use the same application. Customer data is synthetic; email delivery and human transfers are simulated.
 
-<!-- Add a demo screenshot here when available. -->
-
-## Overall workflow
+## Workflow
 
 ```mermaid
 flowchart TB
@@ -41,58 +39,17 @@ flowchart TB
     linkStyle default stroke:#64748b,stroke-width:1.5px;
 ```
 
-The harness advances only when each stage's requirements are met. A conversation can stay in one stage for several turns or complete multiple stages in one turn.
+Claim details require at least three matching identity categories. The agent can clarify, acknowledge frustration, and offer alternatives without skipping required steps.
 
-## Setup
+## Local setup
 
-You need **Git**, **Docker Desktop** running (or Docker Engine with Compose), and your own **OpenAI-compatible or Anthropic API key**. Model requests require an internet connection and use your provider account.
+Install Git and Docker Desktop, then start Docker. You need an OpenAI-compatible or Anthropic API key and internet access for model requests.
 
-### 1. Start the app
+### 1. Download and configure
 
 ```bash
 git clone --branch feat/hosted-demo https://github.com/XinhaoTheo/insurance-claims-sop-agent.git
 cd insurance-claims-sop-agent
-docker compose up --build -d
-```
-
-The first build downloads dependencies and may take a few minutes. Docker includes the frontend, backend, test data, and SQLite database; no separate Python, Node.js, or database setup is needed.
-
-Open **[http://localhost:8000](http://localhost:8000)**. The page opens without an API key; connect a model before chatting.
-
-### 2. Connect your model
-
-Open **Model settings** and fill in:
-
-| Setting | What to enter |
-| --- | --- |
-| API protocol | **OpenAI-compatible** or **Anthropic (Claude)** |
-| API base URL | The official address is filled automatically. Change it if using another compatible service. Use the API root, usually ending in `/v1`. |
-| Model name | The exact model ID available to your account |
-| API key | Your provider's API key |
-
-Click **Test connection**, then **Apply model**. Testing the connection alone does not apply the settings.
-
-Settings entered here apply to the current conversation. Session keys are kept in backend memory, not the database or browser storage, and expire after one hour. Reconnect after a server restart, or configure defaults below for new conversations.
-
-### 3. Try the workflow
-
-Paste this synthetic customer example into the chat:
-
-```text
-I'm the policyholder. My name is Margaret Chen, policy POL-9921.
-I'm calling about my denied healthcare claim from January.
-DOB is 1985-03-15, SSN last four is 4472.
-```
-
-The agent should verify the three identity fields, reuse the claim hint, and explain the matching claim. Ask a follow-up such as **"What documents do I need?"**, then say **"That's all, please summarize."** Choose **Send mock email** or **Skip email** to finish.
-
-The demo uses today's date by default, so a recorded appeal deadline may already have passed. To demonstrate the supplied case before its deadline, set `DEMO_DATE=2026-03-10` in `.env` before starting a new conversation.
-
-### Optional: configure defaults with `.env`
-
-For repeated sessions or automated testing, configure the model before starting the app:
-
-```bash
 cp .env.example .env
 ```
 
@@ -105,26 +62,45 @@ MODEL_NAME=your-model-id
 MODEL_BASE_URL=
 ```
 
-Use `anthropic` for Claude. A blank `MODEL_BASE_URL` selects the protocol's official endpoint. Keep your real key out of Git.
+Use `anthropic` for Claude. Leave the base URL blank for the selected protocol's official endpoint, or enter a compatible API root, usually ending in `/v1`. Use a model ID available to your account. Never commit your key.
 
-After changing `.env`, run `docker compose up -d`, reload the page, and start a **New conversation** to use the updated defaults.
-
-### Stop or troubleshoot
+### 2. Start the app
 
 ```bash
-# View startup errors or request logs.
-docker compose logs -f app
+docker compose up --build -d
+```
 
-# Stop the app and retain its database.
+Open **[localhost:8000](http://localhost:8000)**. Docker builds the UI and backend and creates SQLite automatically; no separate database setup is needed.
+
+Alternatively, start without model defaults and open **Model settings** in the UI. Enter the protocol, base URL, model, and key, then click **Test connection → Apply model**. These settings apply to the current conversation; temporary keys expire after one hour or a server restart.
+
+After editing `.env`, run `docker compose up -d`, reload the page, and start a new conversation.
+
+### 3. Try a conversation
+
+```text
+I'm the policyholder. My name is Margaret Chen, policy POL-9921.
+I'm calling about my denied healthcare claim from January.
+DOB is 1985-03-15, SSN last four is 4472.
+```
+
+Then ask **“What documents do I need?”**, followed by **“That's all, please summarize.”** Choose **Send mock email** or **Skip email**.
+
+The app uses today's date. To demonstrate the sample before its appeal deadline, set `DEMO_DATE=2026-03-10` before starting a new conversation.
+
+### Logs and shutdown
+
+```bash
+docker compose logs -f app
 docker compose down
 ```
 
-SQLite data is stored automatically in a Docker volume and survives normal restarts.
+Local conversations survive normal restarts in a Docker volume. Render Free uses temporary storage, so conversations may be lost after sleep, restart, or redeployment.
 
-## Public URL
+## More details
 
-The first public deployment targets **Render Free**, using the included `render.yaml`. It sleeps after 15 idle minutes and resets saved conversations when it restarts. See [Hosting](docs/hosting.md) for setup and optional paid hosting with persistent SQLite. This hosted demo uses an operator-funded model: visitors can chat immediately, and model settings are managed on the server. Local Docker keeps configurable endpoints and your own API credentials.
-
-For automated evaluation, open the [local API documentation](http://localhost:8000/docs). See [Architecture](docs/architecture.md) for implementation details.
-
-See [Testing](docs/testing.md) to run the real-model acceptance scenarios and measure response latency.
+- [Architecture](docs/architecture.md): modules, identity handling, and SOP gates.
+- [Hosting](docs/hosting.md): deploy the same app on Render.
+- [Testing](docs/testing.md): automated tests and real-model evaluation.
+- [Evaluation results](docs/evaluation-results.md): latest cloud results and known limits.
+- [Local API reference](http://localhost:8000/docs): endpoints for automated clients.
