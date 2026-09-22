@@ -1,6 +1,6 @@
 # Architecture and SOP mechanics
 
-This implementation is a local, single-process application. The browser is a client of the same HTTP API used by automated evaluators. Each normal conversational turn follows **model analysis → deterministic SOP → model rendering**. The model produces untrusted observations and conversational wording; deterministic code controls business state and protected actions.
+This implementation is a single-process application that supports local Docker and public URL deployment. The browser is a client of the same HTTP API used by automated evaluators. Each normal conversational turn follows **model analysis → deterministic SOP → model rendering**. The model produces untrusted observations and conversational wording; deterministic code controls business state and protected actions.
 
 ## Overall request path
 
@@ -32,6 +32,8 @@ There is one business workflow for all caller languages. No English/Chinese bran
 ## Configuration and shared constants
 
 `config.py` loads environment defaults, merges explicit UI/API overrides, validates the endpoint and required fields, and returns a resolved `ModelConfig`. Omitted values inherit defaults; invalid explicit settings fail visibly. The selected protocol determines the default base URL. A different endpoint or protocol cannot borrow a deployment key.
+
+With `HOSTED_DEMO=true`, the API requires a visitor-supplied key and ignores any server-default key. Every model configuration entry point enforces an exact endpoint allowlist from `HOSTED_MODEL_BASE_URLS`, defaulting to the official OpenAI and Anthropic API roots. Local Docker retains flexible endpoints and optional server defaults.
 
 ```mermaid
 flowchart LR
@@ -200,18 +202,25 @@ Model keys supplied by users and parsed identity values stay in process memory; 
 
 The Dockerfile first builds React with Node 22, then copies the output into a Python 3.12 application image. FastAPI serves the page and API together. The application runs as a non-root user; Compose exposes port 8000 on the host loopback address and mounts a named `/data` volume for SQLite. API keys are runtime values and excluded from the build context.
 
+`scripts/start.py` uses the cloud's `PORT` variable, defaulting to 8000, and always starts one worker. When a platform starts the container as root for a root-owned volume, the entrypoint assigns SQLite storage to the application user and drops privileges before starting the server. Hosted instances should mount persistent storage at `/data`; free previews may use temporary storage and start new conversations after a reset.
+
 ```mermaid
 flowchart TD
     Source["GitHub source"] --> Node["Node 22: npm ci + frontend build"]
     Source --> Python["Python 3.12: pinned backend dependencies"]
-    Node --> Image["Single local application image"]
+    Node --> Image["Shared application image"]
     Python --> Image
     Image --> Container["One Uvicorn worker"]
     Env["Runtime .env and explicit session settings"] --> Config["config.py"]
     Config --> Container
     Container --> UI["Browser localhost:8000"]
+    Image --> Cloud["Cloud service: one instance"]
+    Cloud --> URL["Browser: public HTTPS URL"]
     Container --> Volume[("claims-data /data/insurance.db")]
     Container --> Model["Chosen model API"]
+    Config --> Cloud
+    Cloud --> Volume
+    Cloud --> Model
 ```
 
 `scripts/smoke_test.py` loads model settings through `config.py` from environment variables or the project `.env`, tests the actual provider connection, and exercises the HTTP workflow against the running app. It requires the backend dependencies and a real API token. It does not use mock model responses.
@@ -222,4 +231,4 @@ Backend unit and integration tests use controlled provider responses only inside
 
 Start the container, configure protocol/key/model in **Model settings** or `.env`, test the connection, apply the settings, then chat. Remote model addresses require HTTPS; HTTP is limited to `localhost`, `127.0.0.1`, `::1`, and `host.docker.internal`.
 
-Public hosting is deferred. The current localhost/session-token design should not be described as a hardened multi-user cloud deployment.
+Hosted mode serves a small public demo with visitor-owned model keys, an endpoint allowlist, uncached API responses, and a shared limit of 60 API POST requests per rolling minute. It uses the same session tokens, workflow gates, and retry receipts as local Docker. It is not a production insurance system. See [Hosting](hosting.md) for deployment, persistence, and pricing details.

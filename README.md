@@ -1,6 +1,6 @@
 # Insurance Claims SOP Agent
 
-A local chat demo for an insurance claims support agent. An LLM understands the customer and phrases replies naturally, while a code-controlled SOP handles identity verification, case selection, claim support, and optional email follow-up.
+A chat demo for an insurance claims support agent, using the same code for local Docker and hosted URLs. An LLM understands the customer and phrases replies naturally, while a code-controlled SOP handles identity verification, case selection, claim support, and optional email follow-up.
 
 The agent requires three matching identity fields before accessing claim details and remembers useful information across workflow stages. The UI shows the conversation, current phase, saved case hints, and activity log. Customer records are synthetic; email delivery and human handoff are simulated.
 
@@ -118,5 +118,9 @@ docker compose down
 ```
 
 SQLite data is stored automatically in a Docker volume and survives normal restarts.
+
+## Public URL
+
+See [Hosting](docs/hosting.md) for Railway deployment with persistent SQLite storage and a Render free preview. Hosted demos use each visitor's API key and restrict model endpoints; local Docker keeps configurable endpoints and optional server defaults.
 
 For automated evaluation, open the [local API documentation](http://localhost:8000/docs). See [Architecture](docs/architecture.md) for implementation details.
