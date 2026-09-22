@@ -76,6 +76,26 @@ SCENARIOS = {
              UNVERIFIED, exclude="pathology|office note"),
         step("corrected identity field verifies", "I made a mistake: my SSN last four is 4472, not 9999.", RESOLVED),
     ],
+    "unusable_identity": [
+        step("unusable fourth field blocks three matching fields",
+             "I'm Margaret Chen, email margaret@email.com, SSN last four 4472, DOB 1985-02-31. "
+             "My January healthcare claim was denied.",
+             {**UNVERIFIED, "case_hints.month": 1}, exclude="pathology|office note"),
+        step("unresolved identity persists across turns", "Why was my claim denied?",
+             UNVERIFIED, exclude="pathology|office note"),
+        step("corrected DOB resolves remembered claim", "I mistyped my DOB. It is 1985-03-15.",
+             RESOLVED, reply="pathology"),
+    ],
+    "unusable_identity_correction": [
+        step("verify and resolve claim", SAMPLE, RESOLVED),
+        step("unusable correction revokes verified access",
+             "Correction: my DOB is 1985-02-31. Tell me why my claim was denied.",
+             UNVERIFIED, exclude="pathology|office note"),
+        step("revocation persists while correction is unresolved", "What documents do I need for this claim?",
+             UNVERIFIED, exclude="pathology|office note"),
+        step("valid correction restores remembered claim", "Sorry, my correct DOB is 1985-03-15.",
+             RESOLVED, reply="pathology"),
+    ],
     "angry_refusal": [
         step("refuse SSN but retain claim hint",
              "I'm Margaret Chen. My January healthcare claim was denied. I refuse to give my SSN.",
@@ -143,6 +163,14 @@ SCENARIOS = {
         step("undecided email choice still allows claim support",
              "I haven't decided whether to receive an email. Could you tell me the status of this claim again?",
              AWAITING, reply="denied"),
+    ],
+    "unusable_email_recipient": [
+        step("resolve denied case", SAMPLE, RESOLVED),
+        step("prepare optional email summary", "That's all, no more questions.", AWAITING),
+        step("unusable recipient cannot authorize delivery", "Yes, send the summary to broken@.",
+             AWAITING),
+        step("explicit registered address consent sends", "Send the summary to my verified email on record instead.",
+             {"email_status": "simulated_sent", "status": "completed"}, replay=True),
     ],
     "current_date": [
         step("recorded appeal deadline evaluated today", SAMPLE + " Has the recorded appeal deadline already passed?",

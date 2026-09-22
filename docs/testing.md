@@ -30,6 +30,7 @@ The same command accepts your deployed HTTPS URL. Without `--server-model`, the 
 ## Coverage and limits
 
 - Three matching identity fields, alternate fields, incorrect inputs, and attempted gate bypass.
+- Unusable identity fields, revoked access after an unusable correction, clarification recovery, and unusable email recipients.
 - Remembered case hints, grounded follow-ups, case corrections, and case ownership.
 - Recorded payment amounts, unsupported premium questions, and expired appeal deadlines.
 - Emotional replies, repeated verification refusal, scope limits, and simulated human handoff.
