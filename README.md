@@ -4,6 +4,8 @@ An insurance support demo with natural conversation and a code-controlled workfl
 
 **Live website: [insurance-claims-sop-agent-d5gs.onrender.com](https://insurance-claims-sop-agent-d5gs.onrender.com)**
 
+**GitHub repository: [XinhaoTheo/insurance-claims-sop-agent](https://github.com/XinhaoTheo/insurance-claims-sop-agent)**
+
 No API key is required on this website; the owner funds model usage. The free service may need about a minute to wake. To use your own model or key, run the local version below.
 
 Built with React, TypeScript, FastAPI, Pydantic, and SQLite. Local Docker and the hosted demo use the same application. Customer data is synthetic; email delivery and human transfers are simulated.
