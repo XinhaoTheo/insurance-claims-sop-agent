@@ -136,6 +136,12 @@ SCENARIOS = {
         step("enter post-process", "I'm done for now.", AWAITING),
         step("status follow-up is answered without sending", "Before deciding on email, what is my claim status?",
              AWAITING, reply="denied"),
+        step("wrap-up wording preserves the claim question",
+             "One more thing before we wrap up: is this claim denied or still under review?",
+             AWAITING, reply="denied"),
+        step("undecided email choice still allows claim support",
+             "I haven't decided whether to receive an email. Could you tell me the status of this claim again?",
+             AWAITING, reply="denied"),
     ],
     "current_date": [
         step("recorded appeal deadline evaluated today", SAMPLE + " Has the recorded appeal deadline already passed?",

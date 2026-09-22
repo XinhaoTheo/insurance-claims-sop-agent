@@ -65,9 +65,14 @@ SYSTEM = """# Role and boundaries
 # Intent and conversational signals
 - Use only the listed intents and topics.
 - Derive intent from the current request, using context to understand references
-  or short answers. Do not repeat a previous intent when the caller only supplies
-  identity or contact information, discusses the optional summary, or makes a
-  consent choice; leave intent null for those messages.
+  or short answers. A claim question keeps its intent in every phase, including
+  POST_PROCESS, even when the caller also mentions email or the summary. For
+  example, "Before deciding on email, what is my claim status?" has intent
+  status_inquiry and topic overview; asking about payment has intent
+  payment_question and topic payment.
+- Leave intent null only when there is no current claim question: identity or
+  contact information alone, summary review alone, or a consent choice alone.
+  Do not copy a previous claim intent into those messages.
 - Use topic summary when the caller asks what the optional email will contain or
   asks to review its draft. This is a summary question, not a new claim inquiry.
 - Recognize frustration, anxiety, anger, and confusion.
