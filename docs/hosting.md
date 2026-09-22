@@ -22,9 +22,9 @@ Render Free runs the complete workflow without a separate database service. Its 
 2. In Render, choose **New → Blueprint**, connect the repository, select `feat/hosted-demo`, and use the root `render.yaml` file.
 3. Review the configuration: one Docker web service on the **Free** compute plan, with no paid database or disk. Create the Blueprint.
 4. Wait for the deployment to become healthy, then open its generated `onrender.com` URL.
-5. In **Model settings**, select a protocol, enter a valid model name and your own API key, then test and apply the settings. Start a conversation with the Margaret Chen example from the README.
+5. In Render **Environment**, add `MODEL_API_KEY` using your provider key. The Blueprint supplies the model and endpoint defaults. Save and redeploy; visitors can then chat immediately. Model usage is billed to the operator. Keep the real key out of `render.yaml` and Git.
 
-The Blueprint enables `HOSTED_DEMO=true` and checks `/health`. Render provides HTTPS. After a free instance sleeps or restarts, its SQLite database is recreated. If the browser tries to reopen a conversation that no longer exists, the UI recovers by starting a new one; enter your model settings again.
+The Blueprint enables `HOSTED_DEMO=true` and checks `/health`. Render provides HTTPS. After a free instance sleeps or restarts, its SQLite database is recreated. If the browser tries to reopen a conversation that no longer exists, the UI recovers by starting a new one; the server-provided model is available automatically. If no server key is configured, visitors must reconnect their own model.
 
 To keep conversations later, switch to the paid `0.5c-512mb` plan and add a 1 GB disk mounted at `/data`. This changes the hosting cost to approximately $7.25/month before extras. [Blueprint configuration](https://render.com/docs/blueprint-spec), [disk setup](https://render.com/docs/disks).
 
@@ -55,10 +55,11 @@ References: [Docker builds](https://docs.railway.com/builds/dockerfiles), [volum
 
 ## Model settings and public access
 
-- Hosted mode requires each visitor's own API key. A server `MODEL_API_KEY` is ignored in hosted mode, so publishing the URL does not expose a shared model budget.
-- Keys travel over HTTPS to the demo backend and are used there to call the selected provider. They are stored only in server memory, and the model connection expires after one hour. Expired keys are removed on a subsequent API request; disconnect, completed handoff/conversation, or restart also clears them. Keys are not written to SQLite.
+- With a server `MODEL_API_KEY`, hosted mode provides operator-funded chats. The UI hides model settings, and the API rejects visitor model overrides. The key stays in Render environment configuration and backend memory; it is never returned to browsers or stored in SQLite. All model requests use the configured operator account.
+- Without a server key, hosted mode uses visitor-owned keys and exposes the model settings form.
+- Visitor keys travel over HTTPS to the demo backend and are used there to call the selected provider. They are stored only in server memory, and the model connection expires after one hour. Expired keys are removed on a subsequent API request; disconnect, completed handoff/conversation, or restart also clears them. Keys are not written to SQLite.
 - The default allowed endpoints are `https://api.openai.com/v1` and `https://api.anthropic.com/v1`. An administrator can change the comma-separated `HOSTED_MODEL_BASE_URLS` environment variable to allow another trusted endpoint. Visitors cannot make the public backend call arbitrary URLs.
 - Hosted mode limits POST requests to 60 per minute across the whole instance. Local Docker remains configurable without this hosted limit.
 - Use the supplied synthetic customer data when trying the public demo. Email delivery and human transfers are simulated.
 
-For automated evaluation, use the same HTTP API as the UI and supply model settings when creating or configuring a session. The local Docker setup remains available for evaluators who prefer to run the application with their own infrastructure.
+For automated evaluation of the operator-funded demo, use `scripts/evaluate.py --server-model --base-url <HTTPS-URL>`. New sessions need no model fields or visitor API key. Visitor-key deployments still accept model settings when creating or configuring a session. The local Docker setup remains available for evaluators who prefer to run the application with their own infrastructure.

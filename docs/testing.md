@@ -23,7 +23,9 @@ backend/.venv/bin/python scripts/evaluate.py \
   --output test-results/hosted-evaluation.json
 ```
 
-The same command accepts your deployed HTTPS URL. The client supplies the model configuration for each session, which also works with hosted mode. To repeat one scenario, add `--scenario chinese_consent` or another scenario name from `--help`.
+For the operator-funded public demo, add `--server-model`; no local API key is needed and the client sends no model credentials.
+
+The same command accepts your deployed HTTPS URL. Without `--server-model`, the client supplies model configuration for each session, for local or visitor-key deployments. To repeat one scenario, add `--scenario chinese_consent` or another scenario name from `--help`.
 
 ## Coverage and limits
 

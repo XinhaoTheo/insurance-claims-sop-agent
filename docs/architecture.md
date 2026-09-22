@@ -33,7 +33,7 @@ There is one business workflow for all caller languages. No English/Chinese bran
 
 `config.py` loads environment defaults, merges explicit UI/API overrides, validates the endpoint and required fields, and returns a resolved `ModelConfig`. Omitted values inherit defaults; invalid explicit settings fail visibly. The selected protocol determines the default base URL. A different endpoint or protocol cannot borrow a deployment key.
 
-With `HOSTED_DEMO=true`, the API requires a visitor-supplied key and ignores any server-default key. Every model configuration entry point enforces an exact endpoint allowlist from `HOSTED_MODEL_BASE_URLS`, defaulting to the official OpenAI and Anthropic API roots. Local Docker retains flexible endpoints and optional server defaults.
+With `HOSTED_DEMO=true` and a server `MODEL_API_KEY`, visitors use the fixed operator-funded model without configuring credentials. The API rejects visitor model overrides and the UI hides model settings. The server key remains in deployment configuration, outside session credential expiry. Without a server key, visitors supply their own model credentials. Every model configuration entry point enforces an exact endpoint allowlist from `HOSTED_MODEL_BASE_URLS`, defaulting to the official OpenAI and Anthropic API roots. Local Docker retains flexible endpoints and optional server defaults.
 
 ```mermaid
 flowchart LR
@@ -231,4 +231,4 @@ Backend unit and integration tests use controlled provider responses only inside
 
 Start the container, configure protocol/key/model in **Model settings** or `.env`, test the connection, apply the settings, then chat. Remote model addresses require HTTPS; HTTP is limited to `localhost`, `127.0.0.1`, `::1`, and `host.docker.internal`.
 
-Hosted mode serves a small public demo with visitor-owned model keys, an endpoint allowlist, uncached API responses, and a shared limit of 60 API POST requests per rolling minute. It uses the same session tokens, workflow gates, and retry receipts as local Docker. It is not a production insurance system. See [Hosting](hosting.md) for deployment, persistence, and pricing details.
+Hosted mode serves a small public demo with an operator-funded model or visitor-owned keys, an endpoint allowlist, uncached API responses, and a shared limit of 60 API POST requests per rolling minute. It uses the same session tokens, workflow gates, and retry receipts as local Docker. It is not a production insurance system. See [Hosting](hosting.md) for deployment, persistence, and pricing details.

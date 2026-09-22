@@ -26,7 +26,7 @@ Latency excludes the failed request; this is not an availability guarantee. Thes
 
 ## Render deployment
 
-The [public demo](https://insurance-claims-sop-agent-d5gs.onrender.com) runs on Render Free from `feat/hosted-demo`. HTTPS, the chat UI, hosted model defaults, and `/health` were checked. Visitors supply their own API key; no shared model key was configured on Render. Idle sleep and temporary SQLite storage are intentional demo limits.
+The [public demo](https://insurance-claims-sop-agent-d5gs.onrender.com) runs on Render Free from `feat/hosted-demo`. HTTPS, the chat UI, hosted model defaults, and `/health` were checked. These original measurements used visitor-supplied keys. The deployment now supports an operator-funded server key so visitors can chat without configuration. Idle sleep and temporary SQLite storage are intentional demo limits.
 
 The first public run at `619115b` completed 40 conversation turns with no HTTP errors and **212/213 checks passed**. It exposed an intermittent omitted claim-status answer during email consent. A passing retry did not erase that defect. The prompt was corrected in `ad49206` to preserve explicit claim questions during wrap-up, and coverage was expanded to three distinct phrasings.
 

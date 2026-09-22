@@ -4,7 +4,7 @@ A chat demo for an insurance claims support agent, using the same code for local
 
 The agent requires three matching identity fields before accessing claim details and remembers useful information across workflow stages. The UI shows the conversation, current phase, saved case hints, and activity log. Customer records are synthetic; email delivery and human handoff are simulated.
 
-**[Open the hosted demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** · Bring your own API key. The free service may take about a minute to wake.
+**[Open the hosted demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** · No API key needed for the hosted demo. The free service may take about a minute to wake.
 
 <!-- Add a demo screenshot here when available. -->
 
@@ -123,7 +123,7 @@ SQLite data is stored automatically in a Docker volume and survives normal resta
 
 ## Public URL
 
-The first public deployment targets **Render Free**, using the included `render.yaml`. It sleeps after 15 idle minutes and resets saved conversations when it restarts. See [Hosting](docs/hosting.md) for setup and optional paid hosting with persistent SQLite. Hosted demos use each visitor's API key and restrict model endpoints; local Docker keeps configurable endpoints and optional server defaults.
+The first public deployment targets **Render Free**, using the included `render.yaml`. It sleeps after 15 idle minutes and resets saved conversations when it restarts. See [Hosting](docs/hosting.md) for setup and optional paid hosting with persistent SQLite. This hosted demo uses an operator-funded model: visitors can chat immediately, and model settings are managed on the server. Local Docker keeps configurable endpoints and your own API credentials.
 
 For automated evaluation, open the [local API documentation](http://localhost:8000/docs). See [Architecture](docs/architecture.md) for implementation details.
 
