@@ -8,9 +8,9 @@ VERIFY_ID → RESOLVE_INTENT → PROCESS_CASE → POST_PROCESS
 
 **Delivery:** source repository, Docker build recipe, local chat UI, and a documented HTTP API for automated evaluation. There is no hosted deployment or published registry image in this version. The Docker image is built locally from this repository.
 
-## 本地快速启动 / Docker quickstart
+## Docker quickstart
 
-安装 Docker Desktop（或 Docker Engine + Compose），然后执行：
+Install Docker Desktop (or Docker Engine with Compose), then run:
 
 ```bash
 git clone https://github.com/XinhaoTheo/insurance-claims-sop-agent.git
@@ -19,15 +19,15 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-浏览器打开 **[http://localhost:8000](http://localhost:8000)**。页面、SOP 后端、测试数据和 SQLite 初始化都已包含，无需单独安装 Python、Node.js 或数据库。
+Open **[http://localhost:8000](http://localhost:8000)** in your browser. The image includes the web UI, SOP backend, test fixtures, and automatic SQLite initialization. No separate Python, Node.js, or database installation is required.
 
-1. 先用 **Offline fixture** 模式检查固定样例和流程，不需要 Key。
-2. 点击 **Model settings**，选择 **Live AI model**。
-3. 输入 OpenAI 兼容接口的 **Base URL、Model name、API key**。
-4. 点击 **Test connection**，成功后点击 **Use live model**。
-5. 自由输入，观察当前阶段、记忆、执行事件和邮件总结。
+1. Start in **Offline fixture** mode to try the fixed examples and workflow without an API key.
+2. Click **Model settings** and select **Live AI model**.
+3. Enter the **Base URL**, **Model name**, and **API key** for an OpenAI-compatible endpoint.
+4. Click **Test connection**. Once it succeeds, click **Use live model**.
+5. Chat with the agent and inspect the current phase, remembered context, execution events, and email summary.
 
-**Offline 是确定性的规则解析演示，不调用 AI。评估自然语言理解必须使用 Live 模式。** 本地程序也会联网调用你选择的模型服务，相关消息和受限上下文会发送给该服务。
+**Offline mode uses deterministic parsing and does not call AI. Use Live mode to evaluate natural-language understanding.** In Live mode, the local application contacts your selected model provider and sends relevant messages and limited conversation context to that provider.
 
 ```bash
 # Read startup logs and health
@@ -41,7 +41,7 @@ docker compose down
 docker compose up --build -d
 ```
 
-`claims-data` 数据卷保存 SQLite。普通停止、启动和容器替换不会主动删除它。`docker compose down -v` 会删除该卷和演示记录，只有需要彻底重置时才使用。
+The `claims-data` volume stores SQLite data and persists across normal stops, starts, and container replacements. Use `docker compose down -v` only for a complete reset: it deletes the volume and its demo records.
 
 The service binds to `127.0.0.1:8000`, so it is intended for the local machine. One application process is intentional: temporary model credentials and identity values live in process memory.
 
