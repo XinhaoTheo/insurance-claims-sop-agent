@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 type ApiProtocol = 'openai' | 'anthropic';
-type Config = { api_protocol: ApiProtocol; protocol_base_urls: Record<ApiProtocol, string>; base_url: string | null; model: string | null; configured: boolean; demo_date: string; email_mode: string };
+type Config = { api_protocol: ApiProtocol; protocol_base_urls: Record<ApiProtocol, string>; base_url: string | null; model: string | null; configured: boolean; demo_date: string; email_mode: string; hosted: boolean; allowed_model_base_urls: string[] | null };
 type Credentials = { session_id: string; access_token: string };
 type CallerAction = 'send_summary' | 'skip_summary' | 'finish_case';
 type OutgoingTurn = { message: string; turn_id: string; caller_action?: CallerAction };
@@ -43,10 +43,13 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 async function api<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
   const body = await response.json();
-  if (!response.ok) throw new Error(body.detail);
+  if (!response.ok) throw new ApiError(body.detail, response.status);
   return body as T;
 }
 function display(value: string | number): string { return String(value).replaceAll('_', ' '); }
@@ -94,11 +97,17 @@ export default function App() {
         setConfig(defaults); setApiProtocol(defaults.api_protocol); setBaseUrl(defaults.base_url ?? ''); setModel(defaults.model ?? '');
         const saved = savedCredentials();
         if (saved) {
-          const existing = await api<Snapshot>(`/api/sessions/${saved.session_id}`, {}, saved.access_token);
-          setCredentials(saved); setSnapshot(existing);
-        } else {
-          retainSession(await api<CreatedSession>('/api/sessions', { method: 'POST', body: JSON.stringify({}) }));
+          try {
+            const existing = await api<Snapshot>(`/api/sessions/${saved.session_id}`, {}, saved.access_token);
+            setCredentials(saved); setSnapshot(existing);
+            return;
+          } catch (e) {
+            if (!(e instanceof ApiError) || e.status !== 404) throw e;
+            sessionStorage.removeItem(STORAGE_KEY);
+            setNotice('Your previous conversation is no longer available. A new conversation has been started.');
+          }
         }
+        retainSession(await api<CreatedSession>('/api/sessions', { method: 'POST', body: JSON.stringify({}) }));
       } catch (e) { setError((e as Error).message); }
       finally { setBooting(false); }
     })();
@@ -151,10 +160,10 @@ export default function App() {
         setModelMessage(`${result.message} You can now apply it to this session.`);
       } else {
         const next = await api<Snapshot>(`/api/sessions/${session.session_id}/model`, { method: 'POST', body: JSON.stringify(payload) }, session.access_token);
-        setSnapshot(next); setModal(false); setNotice('AI model configured for this session. You can start chatting.');
+        setSnapshot(next); setApiKey(''); setModal(false); setNotice('AI model configured for this session. You can start chatting.');
       }
     } catch (e) { setModelError((e as Error).message); }
-    finally { if (!testOnly) setApiKey(''); setModelBusy(false); }
+    finally { setModelBusy(false); }
   }
   async function disconnectModel() {
     if (modelBusy || busy) return;
@@ -167,7 +176,10 @@ export default function App() {
     finally { setApiKey(''); setModelBusy(false); }
   }
   function changeProtocol(value: ApiProtocol) {
-    setApiProtocol(value); setBaseUrl(config!.protocol_base_urls[value]);
+    const defaults = config!;
+    const endpoint = defaults.protocol_base_urls[value];
+    const allowed = defaults.allowed_model_base_urls;
+    setApiProtocol(value); setBaseUrl(allowed && !allowed.includes(endpoint) ? allowed[0] : endpoint);
     setModel(''); setApiKey(''); setModelError(''); setModelMessage('');
   }
   function fillSample(value: string) { setInput(value); textarea.current?.focus(); }
@@ -185,14 +197,14 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <a className="brand" href="#" onClick={e => e.preventDefault()} aria-label="Claims Companion home"><span className="brand-mark"><Icon name="shield" size={25}/></span><span>Claims Companion<small>INSURANCE SUPPORT · SOP DEMO</small></span></a>
-      <div className="header-actions"><span className="local-badge"><span/> Local workspace</span><button className="button subtle" aria-label="Model settings" onClick={openSettings} disabled={booting || busy || !credentials}><Icon name="key" size={17}/><span>Model settings</span></button><button className="button new-button" aria-label="New conversation" onClick={newSession} disabled={busy || booting || !config}><Icon name="plus" size={17}/><span>New conversation</span></button></div>
+      <div className="header-actions"><span className="environment-badge"><span/>{config ? config.hosted ? 'Hosted demo' : 'Local workspace' : 'Connecting…'}</span><button className="button subtle" aria-label="Model settings" onClick={openSettings} disabled={booting || busy || !credentials}><Icon name="key" size={17}/><span>Model settings</span></button><button className="button new-button" aria-label="New conversation" onClick={newSession} disabled={busy || booting || !config}><Icon name="plus" size={17}/><span>New conversation</span></button></div>
     </header>
     <main className="workspace">
       <section className="conversation-panel" aria-label="Customer conversation">
         <div className="conversation-heading"><div><div className="eyebrow">A LITTLE CLARITY GOES A LONG WAY</div><h1>Let’s work through your claim.</h1><p>A natural conversation. A protected, step-by-step process.</p></div><span className="conversation-emblem"><Icon name="spark" size={27}/></span></div>
         <div className={`connection-banner ${modelConfigured || isClosed ? 'configured' : ''}`}><Icon name={isClosed ? 'check' : modelConfigured ? 'spark' : 'key'} size={16}/><span>{isClosed ? state?.status === 'handoff_requested' ? 'Conversation closed · simulated human support requested' : 'Conversation complete · start a new conversation whenever you’re ready' : booting ? 'Preparing your model connection…' : modelConfigured ? 'AI model configured · business rules enforced by the server' : 'Connect an AI model before starting the conversation.'}</span>{!modelConfigured && !isClosed && <button onClick={openSettings} disabled={booting || !credentials}>Configure model <Icon name="arrow" size={13}/></button>}</div>
         <div className="messages" role="log" aria-label="Conversation messages" aria-live="polite">
-          {booting && <div className="welcome-state"><div className="loading-dots"><i/><i/><i/></div><p>Preparing your local workspace…</p></div>}
+          {booting && <div className="welcome-state"><div className="loading-dots"><i/><i/><i/></div><p>Preparing your conversation…</p></div>}
           {!booting && !messages.length && <div className="welcome-state"><span className="welcome-icon"><Icon name="shield" size={28}/></span><h2>Claim support, with care.</h2><p>We’ll verify your identity first, then help you understand your claim and next steps.</p></div>}
           {messages.map((message) => <div className={`message-row ${message.role}`} key={`${message.turn_id}-${message.role}`}>
             {message.role === 'assistant' && <span className="avatar"><Icon name="shield" size={18}/></span>}
@@ -230,7 +242,7 @@ export default function App() {
     </main>
     <dialog ref={dialog} className="settings-dialog" onCancel={e => { e.preventDefault(); closeSettings(); }} onClick={e => { if (e.target === e.currentTarget) closeSettings(); }}>
       <div className="dialog-content"><div className="dialog-header"><span className="settings-icon"><Icon name="key" size={23}/></span><button className="icon-button" onClick={closeSettings} aria-label="Close model settings" disabled={modelBusy}><Icon name="close"/></button></div><div className="eyebrow">YOUR MODEL, YOUR WORKSPACE</div><h2>Connect the conversation.</h2><p className="dialog-intro">Configure an OpenAI-compatible or Anthropic API to start chatting. Your session uses the model you choose.</p>
-        <div className="settings-fields"><label>API protocol<select value={apiProtocol} onChange={e => changeProtocol(e.target.value as ApiProtocol)} disabled={modelBusy}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic (Claude)</option></select></label><label>API base URL<input type="url" value={baseUrl} placeholder="Enter your provider’s API base URL" onChange={e => setBaseUrl(e.target.value)} autoComplete="off" disabled={modelBusy}/><small>Use the API base address, including /v1 when required. A different protocol or endpoint requires your own key.</small></label><label>Model name<input value={model} placeholder="Enter a model supported by your provider" onChange={e => setModel(e.target.value)} autoComplete="off" disabled={modelBusy}/></label><label>API key <span className="optional">{config?.configured && apiProtocol === config.api_protocol ? 'Server default available' : 'Your provider’s API key'}</span><input type="password" value={apiKey} placeholder="Paste your API key" onChange={e => setApiKey(e.target.value)} autoComplete="off" spellCheck={false} disabled={modelBusy}/></label><div className="privacy-note"><Icon name="shield" size={17}/><p>Your key is submitted to the backend and cleared from this form when applied or closed. It is never saved in browser storage. Relevant conversation context is sent to your model provider.</p></div></div>
+        <div className="settings-fields"><label>API protocol<select value={apiProtocol} onChange={e => changeProtocol(e.target.value as ApiProtocol)} disabled={modelBusy}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic (Claude)</option></select></label><label>API base URL{config?.hosted ? <select value={baseUrl} onChange={e => setBaseUrl(e.target.value)} disabled={modelBusy}>{config.allowed_model_base_urls!.map(url => <option key={url} value={url}>{url}</option>)}</select> : <input type="url" value={baseUrl} placeholder="Enter your provider’s API base URL" onChange={e => setBaseUrl(e.target.value)} autoComplete="off" disabled={modelBusy}/>}<small>{config?.hosted ? 'Choose an endpoint supported by this hosted demo. A different protocol or endpoint requires your own key.' : 'Use the API base address, including /v1 when required. A different protocol or endpoint requires your own key.'}</small></label><label>Model name<input value={model} placeholder="Enter a model supported by your provider" onChange={e => setModel(e.target.value)} autoComplete="off" disabled={modelBusy}/></label><label>API key <span className="optional">{config?.configured && apiProtocol === config.api_protocol ? 'Server default available' : 'Your provider’s API key'}</span><input type="password" value={apiKey} placeholder="Paste your API key" onChange={e => setApiKey(e.target.value)} autoComplete="off" spellCheck={false} disabled={modelBusy}/></label><div className="privacy-note"><Icon name="shield" size={17}/><p>{config?.hosted ? 'Your key is sent over HTTPS to this hosted server and stored only in server memory; the connection expires after one hour. It is not persisted. Using your own key bills model API usage to your provider account. The key is cleared from this form when applied or closed and is never saved in browser storage.' : 'Your key is submitted to the backend and cleared from this form when applied or closed. It is never saved in browser storage.'} Relevant conversation context is sent to your model provider.</p></div></div>
         {modelError && <div className="error-banner" role="alert">{modelError}</div>}{modelMessage && <div className="notice" role="status">{modelMessage}</div>}
         <div className="dialog-footer">{modelConfigured && <button className="button subtle disconnect-button" disabled={modelBusy} onClick={disconnectModel}>Disconnect</button>}<button className="button subtle" disabled={modelBusy} onClick={() => modelAction(true)}><Icon name="refresh" size={16}/>Test connection</button><button className="button primary" disabled={modelBusy} onClick={() => modelAction()}>{modelBusy ? 'Working…' : 'Apply model'}<Icon name="arrow" size={17}/></button></div>
       </div>
