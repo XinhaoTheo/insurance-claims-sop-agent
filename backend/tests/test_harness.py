@@ -10,7 +10,7 @@ from app.schemas import TurnAnalysis
 
 
 ROOT = Path(__file__).resolve().parents[2]
-IDENTITY = {"name": "Margaret Chen", "dob": "1985-03-15", "ssn_last4": "4472"}
+IDENTITY = {"name": "margaret chen", "dob": "1985-03-15", "ssn_last4": "4472"}
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def test_sample_orders_verification_before_lookup_and_answers_in_same_turn(conve
 
 def test_partial_identity_retains_later_intent_without_disclosure(conversation):
     snapshot, reply = run(conversation,
-        "partial", identity={"name": "Margaret Chen", "dob": "1985-03-15"},
+        "partial", identity={"name": "margaret chen", "dob": "1985-03-15"},
         hints={"case_type": "healthcare", "status": "denied", "month": 1}, intent="denial_question")
     assert snapshot["state"]["phase"] == "VERIFY_ID"
     assert "CL-2048" not in reply and "pathology report" not in reply
@@ -71,10 +71,72 @@ def test_partial_identity_retains_later_intent_without_disclosure(conversation):
     assert "pathology report" in reply
 
 
+def test_unusable_fourth_field_blocks_verification_until_clarified(conversation):
+    snapshot, reply = run(conversation, "unusable",
+        identity={"name": "margaret chen", "email": "margaret@email.com", "ssn_last4": "4472", "dob": None},
+        identity_evidence={"dob": "1985-02-31"},
+        hints={"case_type": "healthcare", "status": "denied", "month": 1}, intent="denial_question")
+    assert not snapshot["state"]["verified"]
+    assert snapshot["state"]["phase"] == "VERIFY_ID"
+    assert "dob" not in snapshot["state"]["identity_collected"]
+    assert "clarify" in reply and "CL-2048" not in reply
+    snapshot, reply = run(conversation, "followup", topic="denial")
+    assert not snapshot["state"]["verified"] and "CL-2048" not in reply
+    assert not any(e["kind"] == "find_my_claims" for e in snapshot["events"])
+    snapshot, reply = run(conversation, "clarified", identity={"dob": "1985-03-15"})
+    assert snapshot["state"]["verified"]
+    assert snapshot["state"]["selected_case_id"] == "CL-2048"
+    assert "pathology report" in reply
+
+
+@pytest.mark.parametrize("phase", ["PROCESS_CASE", "POST_PROCESS"])
+def test_unusable_correction_revokes_access_and_clears_the_old_value(conversation, phase):
+    if phase == "POST_PROCESS":
+        enter_post(conversation)
+    else:
+        verify_and_find(conversation)
+    snapshot, reply = run(conversation, "correction", identity={"dob": None},
+        identity_evidence={"dob": "1985-02-31"}, hints={"case_id": "CL-2048"},
+        intent="denial_question", email_choice="send")
+    assert snapshot["state"]["phase"] == "VERIFY_ID"
+    assert not snapshot["state"]["verified"]
+    assert snapshot["state"]["selected_case_id"] is None
+    assert snapshot["email_summary"] is None
+    assert conversation[2]["dob"] is None
+    assert "CL-2048" not in reply and "pathology report" not in reply
+    assert any(e["kind"] == "verification_revoked" for e in snapshot["events"])
+    assert not any(e["kind"] == "email_consent" for e in snapshot["events"])
+    snapshot, reply = run(conversation, "still-unresolved", topic="denial")
+    assert not snapshot["state"]["verified"] and "CL-2048" not in reply
+    snapshot, _ = run(conversation, "clarified", identity={"dob": "1985-03-15"})
+    assert snapshot["state"]["verified"]
+    assert snapshot["state"]["selected_case_id"] == "CL-2048"
+
+
+def test_null_without_evidence_does_not_clear_collected_identity(conversation):
+    verify_and_find(conversation)
+    snapshot, reply = run(conversation, "followup", identity={"dob": None}, topic="documents")
+    assert snapshot["state"]["verified"]
+    assert conversation[2]["dob"] == "1985-03-15"
+    assert "pathology report" in reply
+
+
 def test_invalid_transition_cannot_skip_a_phase(conversation):
     with pytest.raises(PermissionError):
         transition(conversation[1], "PROCESS_CASE")
     assert conversation[1]["state"]["phase"] == "VERIFY_ID"
+
+
+def test_unknown_transition_target_is_rejected_without_index_error(conversation):
+    with pytest.raises(PermissionError):
+        transition(conversation[1], "NOT_A_PHASE")
+
+
+def test_unhandled_phase_fails_loudly_instead_of_returning_none(conversation):
+    harness, snapshot, identity = conversation
+    snapshot["state"]["phase"] = "NOT_A_PHASE"
+    with pytest.raises(PermissionError):
+        harness.run(snapshot, TurnAnalysis(), identity, "unknown-phase")
 
 
 def test_two_january_claims_require_disambiguation(conversation):
@@ -201,7 +263,7 @@ def test_human_offer_can_resume_without_requesting_transfer(conversation):
 
 def test_scope_recovery_keeps_identity_and_remembered_case(conversation):
     run(conversation,
-        "mixed", identity={"name": "Margaret Chen"},
+        "mixed", identity={"name": "margaret chen"},
         hints={"case_type": "healthcare", "status": "denied", "month": 1},
         intent="denial_question", scope="mixed")
     run(conversation, "irrelevant", scope="out_of_scope")

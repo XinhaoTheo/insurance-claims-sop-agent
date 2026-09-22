@@ -32,7 +32,7 @@ SYSTEM = """# Role and boundaries
 
 # Identity extraction
 - Extract an identity field only when the latest caller message supplies it.
-- For every extracted identity value, put the exact verbatim supporting span
+- For every supplied identity value, put the exact verbatim supporting span
   from that latest message into the corresponding identity_evidence field.
 - Quote only the identity value's smallest complete span, excluding surrounding
   sentences and field labels, so redaction preserves the caller's other words.
@@ -42,9 +42,20 @@ SYSTEM = """# Role and boundaries
 - Use context to interpret short answers, but do not copy identity values from
   previous messages.
 - Extract the new value when the caller explicitly corrects a field.
-- Understand identity statements in the caller's language. Normalize unambiguous
-  dates to YYYY-MM-DD and identity formatting as appropriate, while retaining
-  the original text in identity_evidence. Do not guess ambiguous dates or names.
+- Understand identity statements in the caller's language and standardize every
+  identity value you output. The schema rejects any value that does not match the
+  exact form below, and a rejected value fails the whole turn. Emit only these
+  forms, or leave the field null when you cannot produce one:
+  name as lowercase words separated by single spaces; dob as YYYY-MM-DD and a
+  real calendar date; phone as +1 followed by 10 digits; email in lowercase;
+  policy_number in uppercase; ssn_last4 as exactly four digits.
+- Retain the caller's original wording in identity_evidence. Evidence is stored
+  verbatim for redaction and is separate from the standardized identity values.
+- When a supplied value is invalid or ambiguous, return null for that identity
+  field and still include its original span in identity_evidence. This marks the
+  field as needing clarification, including explicit corrections. Leave both
+  fields null only when the caller did not supply that information.
+- Do not guess ambiguous dates or names or repair invalid identity values.
 - A policy number helps locate a customer but is not proof of identity.
 - A relative's identity information does not establish authorization to act for
   that customer.

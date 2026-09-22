@@ -10,43 +10,12 @@ from datetime import date
 from decimal import Decimal
 import json
 from pathlib import Path
-import re
 
 from .constants import (
     AUTHORIZED_PHASES, DOCUMENT_ALIASES, DOCUMENT_TOPICS, FIXTURE_FILES,
     FOLLOWUP_TOPICS, PAYMENT_LABELS, PII_FIELDS,
 )
-
-
-def normalize(field: str, value: str) -> str | None:
-    """Normalize presentation, without fuzzy matching or repairing identities."""
-    value = value.strip()
-    if not value:
-        return None
-    if field == "dob":
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-            return None
-        try:
-            return date.fromisoformat(value).isoformat()
-        except ValueError:
-            return None
-    if field == "ssn_last4":
-        return value if re.fullmatch(r"[0-9]{4}", value) else None
-    if field == "phone":
-        if not re.fullmatch(r"\+?[0-9() .-]+", value):
-            return None
-        digits = re.sub(r"[^0-9]", "", value)
-        # This US demo permits domestic formatting of an existing +1 number.
-        if len(digits) == 10 and not value.startswith("+"):
-            digits = "1" + digits
-        return digits if 11 <= len(digits) <= 15 else None
-    if field == "name":
-        return " ".join(value.split()).casefold()
-    if field == "email":
-        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
-            return None
-        return value.casefold()
-    return value.casefold()
+from .schemas import canonical_name
 
 
 class FixtureRepository:
@@ -60,6 +29,7 @@ class FixtureRepository:
         self.guidelines = self.required_document_guideline
         self.people = {person["party_id"]: person for person in self.policyholders}
         self.cases = {claim["case_id"]: claim for claim in self.claims}
+        self.records: dict[str, dict[str, set[str]]] = {}
 
     @staticmethod
     def identity_result(reason: str, matched: list | None = None, party_id: str | None = None) -> dict:
@@ -70,36 +40,44 @@ class FixtureRepository:
             "reason": reason,
         }
 
-    def verify_identity(self, fields: dict[str, str]) -> dict:
+    def record(self, person: dict) -> dict[str, set[str]]:
+        """Prepare one customer's match values once. Names use the match key."""
+        record = self.records.get(person["party_id"])
+        if record is None:
+            record = {}
+            for field in ("name", "dob", "phone", "email", "policy_number"):
+                if field not in person:
+                    continue
+                values = [person[field], *person.get(f"{field}_aliases", [])]
+                match_key = canonical_name if field == "name" else str
+                record[field] = {match_key(value) for value in values}
+            if person.get("id_type") == "ssn_last4":
+                record["ssn_last4"] = {person["id_last4"]}
+            self.records[person["party_id"]] = record
+        return record
+
+    def verify_identity(self, fields: dict[str, str | None]) -> dict:
         """Require three distinct PII categories and no supplied-field conflict.
 
-        Policy number may narrow a customer but never contributes to the count.
-        All supplied identity values, including policy number, must agree with
-        the same unique customer. Registered aliases still count as one field.
+        Values arrive standardized by the model and validated by the schema; this
+        method only matches them against the fixtures. Policy number may narrow a
+        customer but never contributes to the count. Registered aliases still
+        count as one field each.
         """
-        supplied = {}
-        for key, value in fields.items():
-            normalized = normalize(key, value)
-            if normalized is None:
-                return self.identity_result("invalid_fields")
-            supplied[key] = normalized
-        if not supplied:
+        if not fields:
             return self.identity_result("insufficient_fields")
 
         candidates = []
         partial = []
         for person in self.policyholders:
+            record = self.record(person)
             matched = []
             conflicts = []
-            for field, provided in supplied.items():
-                if field == "ssn_last4":
-                    values = [person["id_last4"]] if person["id_type"] == "ssn_last4" else []
+            for field, provided in fields.items():
+                if provided in record.get(field, set()):
+                    if field in PII_FIELDS:
+                        matched.append(field)
                 else:
-                    values = [person[field], *person.get(f"{field}_aliases", [])]
-                matches = any(normalize(field, item) == provided for item in values)
-                if matches and field in PII_FIELDS:
-                    matched.append(field)
-                if not matches:
                     conflicts.append(field)
             entry = (person, sorted(matched), conflicts)
             partial.append(entry)

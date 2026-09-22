@@ -1,6 +1,5 @@
 """HTTP acceptance tests for the complete local demo and its safety gates."""
 
-import json
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -19,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SAMPLE = "I’m the policyholder. My name is Margaret Chen, policy POL-9921. I’m calling about my denied healthcare claim from January. DOB is 1985-03-15, SSN last four is 4472."
 LIVE = {"api_key": "test-provider-secret-123", "base_url": "https://example.test/v1", "model": "test-model"}
 
-SAMPLE_ANALYSIS = {"identity": {"name": "Margaret Chen", "dob": "1985-03-15", "ssn_last4": "4472", "policy_number": "POL-9921"}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question", "topic": "denial"}
+SAMPLE_ANALYSIS = {"identity": {"name": "margaret chen", "dob": "1985-03-15", "ssn_last4": "4472", "policy_number": "POL-9921"}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question", "topic": "denial"}
 
 
 @pytest.fixture
@@ -111,7 +110,7 @@ def test_skip_email_does_not_create_an_outbox_entry(api):
 
 def test_partial_answers_remember_intent_and_only_query_after_verification(api):
     actor = session(api)
-    result = say(api, actor, "My name is Margaret Chen. I'm calling about my denied healthcare claim from January.", "early-hint", {"identity": {"name": "Margaret Chen"}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
+    result = say(api, actor, "My name is Margaret Chen. I'm calling about my denied healthcare claim from January.", "early-hint", {"identity": {"name": "margaret chen"}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
     assert result["state"]["phase"] == "VERIFY_ID"
     assert "pathology report" not in result["reply"]
     assert not any(e["kind"] == "find_my_claims" for e in result["events"])
@@ -135,7 +134,7 @@ def test_two_january_claims_accept_a_short_creation_year_answer(api):
 
 def test_registered_aliases_verify_and_no_claims_does_not_fabricate_one(api):
     actor = session(api)
-    result = say(api, actor, "My name is Yaven Li. DOB is 1989-12-03. Email is yawen.li@example.com. What is my claim status?", "aliases", {"identity": {"name": "Yaven Li", "dob": "1989-12-03", "email": "yawen.li@example.com"}, "intent": "status_inquiry"})
+    result = say(api, actor, "My name is Yaven Li. DOB is 1989-12-03. Email is yawen.li@example.com. What is my claim status?", "aliases", {"identity": {"name": "yaven li", "dob": "1989-12-03", "email": "yawen.li@example.com"}, "intent": "status_inquiry"})
     assert result["state"]["verified"]
     assert result["state"]["phase"] == "RESOLVE_INTENT"
     assert result["state"]["selected_case_id"] is None
@@ -153,10 +152,47 @@ def test_dob_correction_recloses_gate_and_does_not_disclose_claim(api):
 
 def test_policy_number_is_not_a_third_pii_field(api):
     actor = session(api)
-    result = say(api, actor, "My name is Margaret Chen, DOB is 1985-03-15, policy POL-9921. Why was my healthcare claim denied?", "two-only", {"identity": {"name": "Margaret Chen", "dob": "1985-03-15", "policy_number": "POL-9921"}, "intent": "denial_question"})
+    result = say(api, actor, "My name is Margaret Chen, DOB is 1985-03-15, policy POL-9921. Why was my healthcare claim denied?", "two-only", {"identity": {"name": "margaret chen", "dob": "1985-03-15", "policy_number": "POL-9921"}, "intent": "denial_question"})
     assert not result["state"]["verified"]
     assert result["state"]["phase"] == "VERIFY_ID"
     assert "pathology report" not in result["reply"]
+
+
+def test_unusable_correction_stays_blocked_across_requests_and_retry(api):
+    actor = session(api)
+    say(api, actor, SAMPLE, "verified", SAMPLE_ANALYSIS)
+    message = "Actually my DOB is 1985-02-31. Why was my claim denied?"
+    result = say(api, actor, message, "unusable-correction",
+                 {"identity": {"dob": None}, "identity_evidence": {"dob": "1985-02-31"}, "intent": "denial_question"})
+    assert not result["state"]["verified"]
+    assert result["state"]["phase"] == "VERIFY_ID"
+    assert "1985-02-31" not in result["messages"][-2]["content"]
+    assert api[1].state.identities[actor[0]["session_id"]][0]["dob"] is None
+    assert say(api, actor, message, "unusable-correction") == result
+    loaded = api[0].get(f"/api/sessions/{actor[0]['session_id']}", headers=actor[1]).json()
+    assert not loaded["state"]["verified"]
+    result = say(api, actor, "Tell me the denial reason.", "still-blocked", {"intent": "denial_question"})
+    assert not result["state"]["verified"]
+    assert "pathology report" not in result["reply"]
+    result = say(api, actor, "I meant March 15, 1985.", "corrected",
+                 {"identity": {"dob": "1985-03-15"}, "identity_evidence": {"dob": "March 15, 1985"}})
+    assert result["state"]["verified"]
+    assert result["state"]["selected_case_id"] == "CL-2048"
+
+
+def test_unusable_email_recipient_does_not_authorize_sending(api):
+    actor = session(api)
+    reach_post(api, actor)
+    result = say(api, actor, "Send the summary to broken@.", "unusable-recipient",
+                 {"identity": {"email": None}, "identity_evidence": {"email": "broken@"}, "email_choice": "send"})
+    assert result["state"]["phase"] == "POST_PROCESS"
+    assert result["state"]["verified"]
+    assert result["state"]["email_status"] == "awaiting_choice"
+    assert not any(e["kind"] == "email_consent" for e in result["events"])
+    with sqlite3.connect(api[2]["database"]) as db:
+        assert db.execute("SELECT count(*) FROM email_outbox").fetchone()[0] == 0
+    result = say(api, actor, "Send it to my registered address instead.", "registered-recipient", {"email_choice": "send"})
+    assert result["state"]["email_status"] == "simulated_sent"
 
 
 def test_emotion_and_repeated_irrelevant_questions_preserve_verification_gate(api):
@@ -239,16 +275,20 @@ def test_validation_rejects_client_authority_and_invalid_messages(api):
 def test_raw_pii_and_model_keys_are_not_persisted_or_returned(api):
     actor = session(api)
     response = say(api, actor, SAMPLE, "sensitive", SAMPLE_ANALYSIS)
-    encoded = json.dumps(response)
-    for secret in ["1985-03-15", "4472", "Margaret Chen", "POL-9921"]:
-        assert secret not in encoded
+    messages_text = " ".join(item["content"] for item in response["messages"])
+    for secret in ["1985-03-15", "Margaret Chen", "POL-9921"]:
+        assert secret not in messages_text
+    assert "4472" not in messages_text and "[ssn_last4 provided]" in messages_text
     model_path = f"/api/sessions/{actor[0]['session_id']}/model"
     configured = api[0].post(model_path, headers=actor[1], json=LIVE)
     assert configured.status_code == 200
     assert LIVE["api_key"] not in configured.text
     with sqlite3.connect(api[2]["database"]) as db:
         persisted = " ".join(str(row) for table in ["sessions", "turns", "email_outbox"] for row in db.execute(f"SELECT * FROM {table}"))
-    for secret in [LIVE["api_key"], "1985-03-15", "4472", "Margaret Chen", "POL-9921", actor[0]["access_token"]]:
+    # Long, unique secrets are safe to search in the whole blob. The four-digit
+    # SSN suffix is checked against message text above, because a random token or
+    # event timestamp can contain "4472" as a substring without any leak.
+    for secret in [LIVE["api_key"], "1985-03-15", "Margaret Chen", "POL-9921", actor[0]["access_token"]]:
         assert secret not in persisted
     assert actor[0]["session_id"] in api[1].state.credentials
     cleared = api[0].delete(model_path, headers=actor[1])
@@ -429,7 +469,7 @@ def test_rendered_reply_is_persisted_and_context_contains_only_redacted_conversa
 
     monkeypatch.setattr(main, "render_reply", render)
     first = say(api, actor, "Soy Margaret Chen, nací el 15 de marzo de 1985.", "spanish-identity",
-                {"identity": {"name": "Margaret Chen", "dob": "1985-03-15"},
+                {"identity": {"name": "margaret chen", "dob": "1985-03-15"},
                  "identity_evidence": {"dob": "15 de marzo de 1985"}})
     assert first["reply"] == spanish_reply
     assert first["messages"][-1]["content"] == spanish_reply
@@ -586,3 +626,36 @@ def test_terminal_session_reuses_its_final_reply_without_models_or_new_turn(api,
     with sqlite3.connect(api[2]["database"]) as db:
         assert db.execute("SELECT count(*) FROM turns").fetchone()[0] == 3
         assert db.execute("SELECT count(*) FROM email_outbox").fetchone()[0] == 0
+
+
+def test_renderer_output_is_redacted_before_return_and_persistence(api, monkeypatch):
+    actor = session(api)
+
+    async def leaky_render(approved_reply, message, context, config):
+        return "Margaret Chen, claim CL-2048 is denied; call 650-521-2836 or email margaret@email.com."
+
+    monkeypatch.setattr(main, "render_reply", leaky_render)
+    result = say(api, actor, SAMPLE, "reply-redaction", SAMPLE_ANALYSIS)
+    for secret in ("Margaret Chen", "650-521-2836", "margaret@email.com"):
+        assert secret not in result["reply"]
+        assert all(secret not in item["content"] for item in result["messages"])
+    assert "CL-2048" in result["reply"]
+
+
+def test_expired_session_locks_are_reclaimed_while_held_locks_are_kept(api):
+    actor = session(api)
+    say(api, actor, "hello", "lock-turn", {"intent": "status_inquiry"})
+    session_id = actor[0]["session_id"]
+    assert session_id in api[1].state.locks
+    held, _ = api[1].state.locks[session_id]
+
+    # A held lock must never be reclaimed, even after its recorded expiry.
+    held._locked = True
+    api[1].state.locks[session_id] = (held, 0)
+    api[0].get(f"/api/sessions/{session_id}", headers=actor[1])
+    assert session_id in api[1].state.locks
+    held._locked = False
+
+    api[1].state.locks[session_id] = (held, 0)
+    api[0].get(f"/api/sessions/{session_id}", headers=actor[1])
+    assert session_id not in api[1].state.locks

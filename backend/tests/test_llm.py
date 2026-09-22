@@ -34,12 +34,12 @@ def install_mock_client(monkeypatch, responses, requests):
 
 async def test_analysis_always_calls_model_with_whitelisted_context_and_json_schema(monkeypatch):
     requests = []
-    install_mock_client(monkeypatch, [(200, model_response('{"identity":{"name":"Margaret Chen"},"identity_evidence":{"name":"Margaret Chen"}}'))], requests)
+    install_mock_client(monkeypatch, [(200, model_response('{"identity":{"name":"margaret chen"},"identity_evidence":{"name":"Margaret Chen"}}'))], requests)
     result = await analyze_turn("My name is Margaret Chen", {
         "phase": "VERIFY_ID", "claims": "SECRET_CLAIM", "policyholders": "SECRET_DATABASE",
         "identity_collected": ["dob"], "previous_assistant": "Please provide another field.",
     }, CONFIG)
-    assert result.identity.name == "Margaret Chen"
+    assert result.identity.name == "margaret chen"
     assert result.identity_evidence.name == "Margaret Chen"
     assert str(requests[0].url) == "https://example.test/v1/chat/completions"
     assert requests[0].headers["authorization"] == "Bearer secret-test-key"
@@ -87,7 +87,7 @@ async def test_summary_review_preserves_unresolved_consent_without_copying_previ
 
 
 @pytest.mark.parametrize("invalid", [
-    '{"verified":true}', '{"phase":"PROCESS_CASE"}', '{"identity":{"name":"Margaret Chen","verified":true}}',
+    '{"verified":true}', '{"phase":"PROCESS_CASE"}', '{"identity":{"name":"margaret chen","verified":true}}',
     '{"hints":{"month":13}}', '{"email_choice":"automatically_send"}', '{"finish":"yes"}',
     '{"language":"en"}',
 ])
@@ -97,6 +97,41 @@ async def test_extra_authority_or_invalid_values_fail_without_automatic_retry(mo
     with pytest.raises(ModelError, match="valid analysis"):
         await analyze_turn("hello", {}, CONFIG)
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("identity", [
+    '{"name":"Margaret Chen"}', '{"name":"margaret  chen"}',
+    '{"dob":"March 15, 1985"}', '{"dob":"1985-02-31"}', '{"dob":"1985-3-15"}',
+    '{"phone":"(650) 521-2836"}', '{"phone":"6505212836"}',
+    '{"email":"MARGARET@EMAIL.COM"}', '{"policy_number":"pol-9921"}', '{"ssn_last4":"447"}',
+])
+async def test_nonconforming_identity_is_rejected_as_a_model_error(monkeypatch, identity):
+    # The model standardizes and the schema validates; there is no repair pass.
+    requests = []
+    install_mock_client(monkeypatch, [(200, model_response('{"identity":' + identity + '}'))], requests)
+    with pytest.raises(ModelError, match="valid analysis"):
+        await analyze_turn("hello", {}, CONFIG)
+    assert len(requests) == 1
+
+
+async def test_identity_evidence_keeps_natural_language_verbatim(monkeypatch):
+    requests = []
+    content = '{"identity":{"dob":"1985-03-15"},"identity_evidence":{"dob":"15 de marzo de 1985"}}'
+    install_mock_client(monkeypatch, [(200, model_response(content))], requests)
+    analysis = await analyze_turn("Nací el 15 de marzo de 1985.", {"phase": "VERIFY_ID"}, CONFIG)
+    assert analysis.identity.dob == "1985-03-15"
+    assert analysis.identity_evidence.dob == "15 de marzo de 1985"
+
+
+@pytest.mark.parametrize("config", [CONFIG, ANTHROPIC])
+async def test_unusable_identity_preserves_evidence_for_clarification(monkeypatch, config):
+    requests = []
+    content = '{"identity":{"dob":null},"identity_evidence":{"dob":"1985-02-31"}}'
+    response = model_response(content) if config.api_protocol == "openai" else {"content": [{"type": "text", "text": content}]}
+    install_mock_client(monkeypatch, [(200, response)], requests)
+    analysis = await analyze_turn("Actually my DOB is 1985-02-31.", {"phase": "PROCESS_CASE"}, config)
+    assert analysis.identity.dob is None
+    assert analysis.identity_evidence.dob == "1985-02-31"
 
 
 async def test_invalid_json_returns_clear_error_without_repair(monkeypatch):

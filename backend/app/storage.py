@@ -1,5 +1,6 @@
 """Durable snapshots and idempotency receipts. Raw API keys/PII never go here."""
 import hashlib
+import hmac
 import json
 import sqlite3
 from pathlib import Path
@@ -39,7 +40,6 @@ class Store:
             db.execute("INSERT INTO sessions VALUES (?, ?, ?)", (session_id, self.digest(token), json.dumps(snapshot)))
 
     def load(self, session_id: str, token: str):
-        import hmac
         with self.connect() as db:
             row = db.execute("SELECT token_hash, snapshot FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not row or not hmac.compare_digest(row[0], self.digest(token)):
@@ -51,13 +51,15 @@ class Store:
             row = db.execute("SELECT message_hash, response FROM turns WHERE session_id=? AND turn_id=?", (session_id, turn_id)).fetchone()
         if not row:
             return None
-        if row[0] != self.digest(message):
+        if not hmac.compare_digest(row[0], self.digest(message)):
             raise ValueError("This turn_id was already used with a different message.")
         return json.loads(row[1])
 
     def save(self, session_id: str, snapshot: dict, turn_id=None, message=None, response=None):
         with self.connect() as db:
-            db.execute("UPDATE sessions SET snapshot=? WHERE id=?", (json.dumps(snapshot), session_id))
+            updated = db.execute("UPDATE sessions SET snapshot=? WHERE id=?", (json.dumps(snapshot), session_id))
+            if updated.rowcount != 1:
+                raise ValueError("Session not found")
             if turn_id is not None:
                 db.execute("INSERT INTO turns VALUES (?, ?, ?, ?)", (session_id, turn_id, self.digest(message), json.dumps(response)))
             summary = snapshot["email_summary"]

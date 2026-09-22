@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .business import FixtureRepository
 from .config import ConfigurationError, PROTOCOL_BASE_URLS, resolve_model_config, settings
 from .constants import TERMINAL_STATUSES
-from .harness import Harness, event, identity_reset, new_snapshot, public_snapshot, redact
+from .harness import Harness, event, identity_reset, new_snapshot, public_snapshot, redact, redact_reply
 from .llm import ModelError, analyze_turn, render_reply, test_connection
 from .schemas import MessageRequest, ModelConfig, SessionCreate
 from .storage import Store
@@ -28,11 +28,12 @@ def create_app(overrides: dict | None = None):
     credentials: dict[str, tuple[ModelConfig, float]] = {}
     sponsored = cfg["hosted"] and bool(cfg["model_config"].api_key)
     identities: dict[str, tuple[dict, float]] = {}
-    locks: dict[str, asyncio.Lock] = {}
+    locks: dict[str, tuple[asyncio.Lock, float]] = {}
     app.state.store = store
     app.state.harness = harness
     app.state.identities = identities
     app.state.credentials = credentials
+    app.state.locks = locks
     app.state.settings = cfg
 
     if cfg["hosted"]:
@@ -66,6 +67,14 @@ def create_app(overrides: dict | None = None):
             for key, (value, expires) in list(memory.items()):
                 if expires < now:
                     memory.pop(key, None)
+        for key, (lock, expires) in list(locks.items()):
+            if expires < now and not lock.locked():
+                locks.pop(key, None)
+
+    def session_lock(session_id):
+        lock = locks.get(session_id, (None, 0))[0] or asyncio.Lock()
+        locks[session_id] = (lock, time.monotonic() + cfg["secret_ttl"])
+        return lock
 
     def token(authorization: str | None = Header(default=None)):
         if not authorization or not authorization.startswith("Bearer "):
@@ -177,7 +186,7 @@ def create_app(overrides: dict | None = None):
 
     @app.post("/api/sessions/{session_id}/model")
     async def configure_model(session_id: str, payload: ModelConfig, access: str = Depends(token)):
-        async with locks.setdefault(session_id, asyncio.Lock()):
+        async with session_lock(session_id):
             snapshot = load(session_id, access)
             config = model_configuration(payload)
             credentials[session_id] = (config, time.monotonic() + cfg["secret_ttl"])
@@ -187,7 +196,7 @@ def create_app(overrides: dict | None = None):
 
     @app.delete("/api/sessions/{session_id}/model")
     async def clear_model(session_id: str, access: str = Depends(token)):
-        async with locks.setdefault(session_id, asyncio.Lock()):
+        async with session_lock(session_id):
             snapshot = load(session_id, access)
             credentials.pop(session_id, None)
             event(snapshot, "credentials_cleared", "Model disconnected. Configure a model to continue chatting.")
@@ -196,9 +205,7 @@ def create_app(overrides: dict | None = None):
 
     @app.post("/api/sessions/{session_id}/messages")
     async def message(session_id: str, payload: MessageRequest, access: str = Depends(token)):
-        if not payload.message.strip():
-            raise HTTPException(422, "A nonempty message is required.")
-        async with locks.setdefault(session_id, asyncio.Lock()):
+        async with session_lock(session_id):
             snapshot = load(session_id, access)
             receipt_input = payload.model_dump_json(exclude={"turn_id"})
             try:
@@ -225,7 +232,8 @@ def create_app(overrides: dict | None = None):
             pii = {**identity, **analysis.identity.model_dump(exclude_none=True)}
             evidence = analysis.identity_evidence.model_dump(exclude_none=True)
             caller_text = redact(payload.message, pii, evidence)
-            reply = await render_reply(approved_reply, caller_text, context, config)
+            # The renderer never receives raw PII, but redact its output too.
+            reply = redact_reply(await render_reply(approved_reply, caller_text, context, config), pii, evidence)
             identities[session_id] = (identity, time.monotonic() + cfg["secret_ttl"])
             snapshot["messages"].extend([
                 {"role": "user", "content": caller_text, "turn_id": payload.turn_id, "caller_action": payload.caller_action},

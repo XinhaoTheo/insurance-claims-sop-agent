@@ -15,7 +15,7 @@ def event(snapshot, kind, detail):
 
 def transition(snapshot, phase):
     previous = snapshot["state"]["phase"]
-    if PHASES.index(phase) != PHASES.index(previous) + 1:
+    if phase not in PHASES or previous not in PHASES or PHASES.index(phase) != PHASES.index(previous) + 1:
         raise PermissionError("Invalid SOP transition")
     snapshot["state"]["phase"] = phase
     event(snapshot, "phase_changed", f"{previous} → {phase}")
@@ -40,8 +40,12 @@ def public_snapshot(snapshot):
     return {**snapshot, "state": state}
 
 
-def redact(text, identity, evidence=None):
-    """Only a redacted transcript is persisted or returned by the API."""
+def redact_identity(text, identity, evidence=None):
+    """Replace caller-supplied identity values and full SSNs only.
+
+    Business facts such as appeal dates, amounts, and claim IDs must survive,
+    so generic date patterns are deliberately excluded here.
+    """
     # Callers may mistakenly supply a full SSN despite the last-four prompt.
     value = re.sub(r"(?<!\d)\d{3}[- ]?\d{2}[- ]?\d{4}(?!\d)", "[SSN redacted]", text)
     supplied_values = [*identity.items(), *(evidence or {}).items()]
@@ -49,8 +53,23 @@ def redact(text, identity, evidence=None):
         if supplied:
             pattern = re.escape(str(supplied)).replace(r"\ ", r"\s+") if field == "name" else re.escape(str(supplied))
             value = re.sub(pattern, f"[{field} provided]", value, flags=re.I)
+    return value
+
+
+def redact_reply(text, identity, evidence=None):
+    """Redact a model reply without altering dates, amounts, or claim IDs."""
+    value = redact_identity(text, identity, evidence)
     value = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[email provided]", value)
-    value = re.sub(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", "[date provided]", value)
+    value = re.sub(r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)", "[phone provided]", value)
+    return value
+
+
+def redact(text, identity, evidence=None):
+    """Only a redacted transcript is persisted or returned by the API."""
+    value = redact_identity(text, identity, evidence)
+    value = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[email provided]", value)
+    # The schema requires an ISO dob; this covers an accidental other format too.
+    value = re.sub(r"\b(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4})\b", "[date provided]", value)
     value = re.sub(r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)", "[phone provided]", value)
     return value
 
@@ -71,15 +90,19 @@ class Harness:
     def run(self, snapshot, analysis: TurnAnalysis, identity: dict, turn_id: str):
         """Apply SOP rules and return approved content for the presentation model."""
         state = snapshot["state"]
-        submitted = analysis.identity.model_dump(exclude_none=True)
+        # A quoted value with no standardized form is unresolved, not absent.
+        submitted = {
+            **dict.fromkeys(analysis.identity_evidence.model_dump(exclude_none=True)),
+            **analysis.identity.model_dump(exclude_none=True),
+        }
         # A new recipient is not an identity correction or consent to send to that address.
         if state["phase"] == "POST_PROCESS":
             submitted.pop("email", None)
-        changed = any(k not in identity or identity[k].casefold() != v.casefold() for k, v in submitted.items())
+        changed = any(k not in identity or identity[k] != v for k, v in submitted.items())
         if state["verified"] and changed:
             identity_reset(snapshot, "Caller corrected identity; re-verification required.")
         identity.update(submitted)
-        state["identity_collected"] = [k for k in identity if k != "policy_number"]
+        state["identity_collected"] = [k for k, value in identity.items() if k != "policy_number" and value is not None]
         hints = analysis.hints.model_dump(exclude_none=True)
         if hints.get("date_kind") == "unspecified":
             hints.pop("date_kind", None)
@@ -152,12 +175,16 @@ class Harness:
 
         verified_this_turn = False
         if state["phase"] == "VERIFY_ID":
+            unresolved = [field.replace("_", " ") for field, value in identity.items() if value is None]
+            if unresolved:
+                state["pending"] = "identity"
+                return empathy + f"I couldn't use the {', '.join(unresolved)} you provided. Please clarify those details before I access claim information. Your claim question is saved; you can also ask for a human representative."
             check = self.repo.verify_identity(identity)
             event(snapshot, "verify_identity", "passed" if check["verified"] else "not_verified")
             state["matched_fields"] = check["matched_fields"] if check["verified"] else []
             if not check["verified"]:
                 state["pending"] = "identity"
-                if check["reason"] in ("conflicting_fields", "no_match", "invalid_fields", "ambiguous_identity") and len(identity) >= 3:
+                if check["reason"] in ("conflicting_fields", "no_match", "ambiguous_identity") and len(identity) >= 3:
                     return empathy + "I couldn't verify those details together. Please check what you entered or use another identity field. I need three matching details before I can access protected claim information; your claim question is saved."
                 return empathy + self.resume_prompt(state)
             state.update(verified=True, verified_party_id=check["party_id"], verified_at=time.time(), pending=None)
@@ -221,7 +248,7 @@ class Harness:
                 # Bind consent to the existing verified address and exact draft version.
                 contact = self.repo.get_contact(state)
                 supplied_email = analysis.identity.email
-                if supplied_email and supplied_email.casefold() != contact["email"].casefold():
+                if (supplied_email or analysis.identity_evidence.email) and supplied_email != contact["email"]:
                     return "This demo sends only to the verified email on your record. Changing the recipient needs a separate verification process. Would you like to send to the verified address or skip?"
                 event(snapshot, "email_consent", f"Explicit consent for summary version {state['summary_version']} and verified recipient.")
                 if self.email_failure:
@@ -244,6 +271,8 @@ class Harness:
                 self.make_summary(snapshot)
                 return empathy + answer + "\n\n" + self.email_offer()
             return empathy + self.email_offer()
+
+        raise PermissionError("Unhandled workflow phase")
 
     def resume_prompt(self, state):
         if state["phase"] == "VERIFY_ID":

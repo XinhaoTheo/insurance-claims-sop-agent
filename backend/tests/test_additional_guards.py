@@ -13,7 +13,7 @@ SAMPLE = "My name is Margaret Chen. DOB is 1985-03-15. SSN last four is 4472. My
 def ready_for_post():
     harness = Harness(FixtureRepository(ROOT))
     snapshot, identity = new_snapshot("sample", "2026-03-10"), {}
-    harness.run(snapshot, TurnAnalysis(identity={"name": "Margaret Chen", "dob": "1985-03-15", "ssn_last4": "4472"},
+    harness.run(snapshot, TurnAnalysis(identity={"name": "margaret chen", "dob": "1985-03-15", "ssn_last4": "4472"},
                 hints={"case_type": "healthcare", "status": "denied"}, intent="denial_question"), identity, "verify")
     harness.run(snapshot, TurnAnalysis(finish=True), identity, "finish")
     return harness, snapshot, identity
@@ -57,16 +57,36 @@ def test_normalized_birthdate_evidence_is_redacted(tmp_path, model_observations,
         session = client.post("/api/sessions", json={}).json()
         headers = {"Authorization": "Bearer " + session["access_token"]}
         message = SAMPLE.replace("1985-03-15", birthdate)
-        model_observations.add(message, {"identity": {"name": "Margaret Chen", "dob": "1985-03-15", "ssn_last4": "4472"}, "identity_evidence": {"dob": birthdate}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
+        model_observations.add(message, {"identity": {"name": "margaret chen", "dob": "1985-03-15", "ssn_last4": "4472"}, "identity_evidence": {"dob": birthdate}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
         result = client.post(f"/api/sessions/{session['session_id']}/messages", headers=headers, json={"message": message, "turn_id": "birthdate"})
         assert result.status_code == 200, result.text
         assert result.json()["state"]["verified"]
         snapshot = app.state.store.load(session["session_id"], session["access_token"])
+        returned_text = " ".join(item["content"] for item in result.json()["messages"])
+        persisted_text = " ".join(item["content"] for item in snapshot["messages"])
         for raw_value in (birthdate, "1985-03-15", "Margaret Chen", "4472"):
-            assert raw_value not in str(result.json())
-            assert raw_value not in str(snapshot)
+            assert raw_value not in returned_text
+            assert raw_value not in persisted_text
             assert raw_value not in model_observations.render_calls[-1]["message"]
         assert "[dob provided]" in snapshot["messages"][-2]["content"]
+
+
+def test_slash_formatted_date_without_model_evidence_is_still_redacted(tmp_path, model_observations):
+    path = tmp_path / "db"
+    app = create_app({"database": str(path), "model_config": ModelConfig(api_key="test-secret", model="test-model", base_url="https://example.test/v1")})
+    with TestClient(app) as client:
+        session = client.post("/api/sessions", json={}).json()
+        headers = {"Authorization": "Bearer " + session["access_token"]}
+        message = SAMPLE.replace("1985-03-15", "03/15/1985")
+        # No identity_evidence is supplied, so only the generic date pattern can catch it.
+        model_observations.add(message, {"identity": {"name": "margaret chen", "dob": "1985-03-15", "ssn_last4": "4472"}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
+        result = client.post(f"/api/sessions/{session['session_id']}/messages", headers=headers, json={"message": message, "turn_id": "slash-date"})
+        assert result.status_code == 200, result.text
+        snapshot = app.state.store.load(session["session_id"], session["access_token"])
+        for rendered in (str(result.json()), str(snapshot)):
+            assert "03/15/1985" not in rendered
+            assert "1985-03-15" not in rendered
+        assert "[date provided]" in snapshot["messages"][-2]["content"]
 
 
 def test_old_turn_replay_and_verification_expiry_preserve_completed_session(tmp_path, model_observations):
@@ -76,7 +96,7 @@ def test_old_turn_replay_and_verification_expiry_preserve_completed_session(tmp_
         session = client.post("/api/sessions", json={}).json()
         url = f"/api/sessions/{session['session_id']}"
         headers = {"Authorization": "Bearer " + session["access_token"]}
-        model_observations.add(SAMPLE, {"identity": {"name": "Margaret Chen", "dob": "1985-03-15", "ssn_last4": "4472"}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
+        model_observations.add(SAMPLE, {"identity": {"name": "margaret chen", "dob": "1985-03-15", "ssn_last4": "4472"}, "hints": {"case_type": "healthcare", "status": "denied", "month": 1}, "intent": "denial_question"})
         model_observations.add("That's all", {"finish": True})
         model_observations.add("Skip the email", {"email_choice": "skip"})
         for turn_id, message in (("initial", SAMPLE), ("finish", "That's all"), ("skip", "Skip the email")):
