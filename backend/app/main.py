@@ -26,6 +26,7 @@ def create_app(overrides: dict | None = None):
     store = Store(str(cfg["database"]))
     harness = Harness(FixtureRepository(cfg["fixtures"]), email_failure=cfg["email_failure"])
     credentials: dict[str, tuple[ModelConfig, float]] = {}
+    sponsored = cfg["hosted"] and bool(cfg["model_config"].api_key)
     identities: dict[str, tuple[dict, float]] = {}
     locks: dict[str, asyncio.Lock] = {}
     app.state.store = store
@@ -55,8 +56,8 @@ def create_app(overrides: dict | None = None):
 
     def model_configuration(supplied=None):
         defaults = cfg["model_config"]
-        if cfg["hosted"]:
-            defaults = defaults.model_copy(update={"api_key": None})
+        if sponsored and supplied and supplied.model_dump(exclude_none=True):
+            raise ConfigurationError("This hosted demo uses the operator's model. Model settings cannot be changed by visitors.")
         return resolve_model_config(defaults, supplied, allowed_base_urls=cfg["allowed_model_base_urls"])
 
     def cleanup():
@@ -89,12 +90,14 @@ def create_app(overrides: dict | None = None):
         return snapshot
 
     def resolve_model(session_id):
+        if sponsored:
+            return model_configuration()
         if session_id in credentials:
             return credentials[session_id][0]
         raise HTTPException(409, "Configure a model in Settings before chatting. Your conversation is preserved.")
 
     def session_response(snapshot):
-        return {**public_snapshot(snapshot), "model_configured": snapshot["session_id"] in credentials}
+        return {**public_snapshot(snapshot), "model_configured": sponsored or snapshot["session_id"] in credentials}
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request, exc):
@@ -131,7 +134,8 @@ def create_app(overrides: dict | None = None):
             base_url = official_url if official_url in cfg["allowed_model_base_urls"] else sorted(cfg["allowed_model_base_urls"])[0]
         return {"api_protocol": defaults.api_protocol, "base_url": base_url, "model": defaults.model,
                 "configured": configured, "protocol_base_urls": PROTOCOL_BASE_URLS,
-                "hosted": cfg["hosted"], "allowed_model_base_urls": sorted(cfg["allowed_model_base_urls"]) if cfg["hosted"] else None,
+                "hosted": cfg["hosted"], "sponsored": sponsored,
+                "allowed_model_base_urls": sorted(cfg["allowed_model_base_urls"]) if cfg["hosted"] else None,
                 "demo_date": cfg["demo_date"], "email_mode": "mock"}
 
     @app.post("/api/models/test")
@@ -156,7 +160,7 @@ def create_app(overrides: dict | None = None):
         session_id, access = secrets.token_urlsafe(18), secrets.token_urlsafe(32)
         snapshot = new_snapshot(session_id, demo_date)
         event(snapshot, "session_started", f"Business date: {demo_date}; email/handoff: simulated.")
-        if config is not None:
+        if config is not None and not sponsored:
             credentials[session_id] = (config, time.monotonic() + cfg["secret_ttl"])
         identities[session_id] = ({}, time.monotonic() + cfg["secret_ttl"])
         store.create(session_id, access, snapshot)

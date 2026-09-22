@@ -25,7 +25,7 @@ def hosted_api(tmp_path, model_observations):
               "static": tmp_path / "static", "demo_date": "2026-03-10", "secret_ttl": 3600,
               "email_failure": False, "hosted": True,
               "allowed_model_base_urls": set(PROTOCOL_BASE_URLS.values()),
-              "model_config": ModelConfig(api_key="server-secret", model="default-model",
+              "model_config": ModelConfig(model="default-model",
                                           api_protocol="openai", base_url=PROTOCOL_BASE_URLS["openai"])}
     app = main.create_app(config)
     with TestClient(app) as client:
@@ -81,7 +81,7 @@ def test_configuration_exposes_only_approved_endpoints_and_never_server_credenti
 
 
 @pytest.mark.parametrize("entry_point", ["session", "test", "configure"])
-def test_hosted_requests_cannot_use_a_server_default_key(hosted_api, monkeypatch, entry_point):
+def test_hosted_without_server_key_requires_visitor_credentials(hosted_api, monkeypatch, entry_point):
     client, app, _, _ = hosted_api
     completion = AsyncMock(side_effect=AssertionError("The server key must not fund hosted requests"))
     monkeypatch.setattr(llm, "completion", completion)
@@ -195,3 +195,48 @@ def test_nonblank_empty_hosted_endpoint_list_reports_configuration_error(monkeyp
     monkeypatch.setenv("HOSTED_MODEL_BASE_URLS", " , , ")
     with pytest.raises(ConfigurationError, match="at least one model endpoint"):
         settings()
+
+
+@pytest.fixture
+def sponsored_api(hosted_api):
+    _, _, config, observations = hosted_api
+    config = {**config, "model_config": config["model_config"].model_copy(update={"api_key": "operator-secret"})}
+    app = main.create_app(config)
+    with TestClient(app) as client:
+        yield client, app, config, observations
+
+
+def test_sponsored_demo_starts_without_visitor_key_and_keeps_key_private(sponsored_api):
+    client, app, config, observations = sponsored_api
+    public_config = client.get("/api/config")
+    assert public_config.json()["configured"] is True
+    assert public_config.json()["sponsored"] is True
+    session, headers = create_session(client)
+    assert session["model_configured"] is True
+    path = f"/api/sessions/{session['session_id']}"
+    # Sponsor credentials belong to the service, not expiring visitor sessions.
+    assert app.state.credentials == {}
+    observations.add("Help with my claim", {"intent": "status_inquiry"})
+    response = client.post(path + "/messages", headers=headers,
+                           json={"message": "Help with my claim", "turn_id": "sponsored-turn"})
+    assert response.status_code == 200
+    assert observations.calls[-1]["config"].api_key == "operator-secret"
+    assert observations.render_calls[-1]["config"].api_key == "operator-secret"
+    assert "operator-secret" not in public_config.text + response.text
+    with sqlite3.connect(config["database"]) as database:
+        persisted = " ".join(str(row) for table in ["sessions", "turns"] for row in database.execute(f"SELECT * FROM {table}"))
+    assert "operator-secret" not in persisted
+    with TestClient(main.create_app(config)) as restarted:
+        assert restarted.get(path, headers=headers).json()["model_configured"] is True
+
+
+@pytest.mark.parametrize("entry_point", ["session", "test", "configure"])
+@pytest.mark.parametrize("payload", [{"model": "expensive-model"}, {"base_url": "https://other.test/v1"}, VISITOR_CONFIG])
+def test_sponsored_visitors_cannot_override_operator_model(sponsored_api, monkeypatch, entry_point, payload):
+    client, _, _, _ = sponsored_api
+    completion = AsyncMock()
+    monkeypatch.setattr(llm, "completion", completion)
+    response = configuration_request(client, entry_point, payload)
+    assert response.status_code == 400
+    assert "operator's model" in response.json()["detail"]
+    completion.assert_not_awaited()
