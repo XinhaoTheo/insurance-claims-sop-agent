@@ -31,7 +31,11 @@ SYSTEM = """# Role and boundaries
 - Use only values permitted by the schema's finite enums.
 
 # Identity extraction
-- Extract an identity field only when the latest caller message supplies it.
+- Extract an identity field and its evidence only when the latest caller message
+  supplies a concrete value. Merely naming a field, referring to an existing
+  detail, or declining to provide it does not supply a value. For example,
+  "my verified email" and "the address on file" refer to a stored address;
+  leave both email fields null. Apply this distinction in every language.
 - For every supplied identity value, put the exact verbatim supporting span
   from that latest message into the corresponding identity_evidence field.
 - Quote only the identity value's smallest complete span, excluding surrounding
@@ -47,16 +51,20 @@ SYSTEM = """# Role and boundaries
   exact form below, and a rejected value fails the whole turn. Emit only these
   forms, or leave the field null when you cannot produce one:
   name as lowercase words separated by single spaces; dob as YYYY-MM-DD and a
-  real calendar date; phone as +1 followed by 10 digits; email in lowercase;
+  real calendar date; phone as +1 followed by 10 digits; email as a complete,
+  lowercase address with a local part, @, and a domain with a suffix;
   policy_number in uppercase; ssn_last4 as exactly four digits.
 - Retain the caller's original wording in identity_evidence. Evidence is stored
   verbatim for redaction and is separate from the standardized identity values.
 - When a supplied value is invalid or ambiguous, return null for that identity
   field and still include its original span in identity_evidence. This marks the
   field as needing clarification, including explicit corrections. Leave both
-  fields null only when the caller did not supply that information.
+  fields null when no concrete value is supplied.
 - Do not guess ambiguous dates or names or repair invalid identity values.
 - A policy number helps locate a customer but is not proof of identity.
+- A claim number belongs only in hints.case_id, never in identity.policy_number
+  or identity_evidence.policy_number. Extract policy_number only when the caller
+  identifies the value as a policy number.
 - A relative's identity information does not establish authorization to act for
   that customer.
 
@@ -114,6 +122,12 @@ SYSTEM = """# Role and boundaries
   summary now, or gives an affirmative short answer to the preceding summary
   sending offer.
 - An email address alone is not consent.
+- A request to send to the verified or registered address can authorize sending
+  without supplying an email value; leave both email fields null for that reference.
+- For an actual recipient address, preserve the raw value in identity_evidence.email.
+  Set identity.email only if the address is complete and valid; otherwise set it
+  to null. For example, alex@ produces identity.email=null and
+  identity_evidence.email="alex@", even when email_choice is send.
 - Questions about sending, conditional requests, postponed requests, uncertainty,
   and statements such as "send me nothing" do not authorize sending.
 - Use skip for a definite decision to decline the summary, including a negative

@@ -18,7 +18,8 @@ class IdentityFields(BaseModel):
     name: str | None = None
     dob: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     phone: str | None = Field(default=None, pattern=r"^\+1\d{10}$")
-    email: str | None = Field(default=None, pattern=r"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$")
+    email: str | None = Field(default=None, pattern=r"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$",
+                              description="Complete lowercase email address. If the supplied address is invalid or incomplete, use null and retain its raw value only in identity_evidence.email.")
     ssn_last4: str | None = Field(default=None, pattern=r"^\d{4}$")
     policy_number: str | None = None
 
