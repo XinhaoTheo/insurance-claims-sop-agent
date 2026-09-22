@@ -87,11 +87,28 @@ class Harness:
             # The preceding clarification explicitly asked for a creation year.
             if state["case_hints"].get("date_kind") != "service" and "date_kind" not in hints:
                 hints["date_kind"] = "created"
-        if state["selected_case_id"] and hints.get("case_id") and hints["case_id"] != state["selected_case_id"]:
-            identity_reset(snapshot, "Caller selected another case; starting a new ordered business cycle.")
+        case_changed = False
+        if state["selected_case_id"] and hints:
+            claim = self.repo.guarded_claim(state, state["selected_case_id"])
+            if hints.get("case_id"):
+                case_changed = hints["case_id"].casefold() != claim["case_id"].casefold()
+            else:
+                created = date.fromisoformat(claim["created_at"])
+                case_changed = any(
+                    key in hints and hints[key] != expected
+                    for key, expected in (
+                        ("case_type", claim["case_type"]), ("status", claim["status"]),
+                        ("month", created.month), ("year", created.year),
+                    )
+                ) or hints.get("date_kind") == "service"
+        if case_changed:
+            identity_reset(snapshot, "Caller changed the case description; starting a new ordered business cycle.")
+            state["discussed_topics"] = []
+            state["intent"] = None
+        if case_changed or hints.get("case_id"):
+            # An explicit claim number or a new case replaces stale descriptions.
             state["case_hints"] = {}
             state["hint_sources"] = {}
-            state["discussed_topics"] = []
         if hints:
             state["case_hints"].update(hints)
             for key in hints:
@@ -216,7 +233,10 @@ class Harness:
                 snapshot["email_summary"]["status"] = "simulated_sent"
                 event(snapshot, "email_simulated", "Saved once to the local outbox. No external email sent.")
                 return "The summary was saved to the simulated email outbox. No real email was sent; you can review the full draft in the summary panel."
-            if analysis.topic not in ("overview", "unknown"):
+            if analysis.topic == "summary":
+                summary = snapshot["email_summary"]
+                return empathy + f"Here is the current email draft.\n\nSubject: {summary['subject']}\n\n{summary['body']}\n\n" + self.email_offer()
+            if analysis.topic != "overview" or analysis.intent:
                 claim = self.repo.guarded_claim(state, state["selected_case_id"])
                 answer = self.answer_claim(snapshot, claim, analysis.topic)
                 if analysis.topic not in state["discussed_topics"]:
@@ -275,4 +295,4 @@ class Harness:
         event(snapshot, "summary_prepared", f"Prepared version {state['summary_version']}; no sending consent yet.")
 
     def email_offer(self):
-        return "Would you like me to send the summary to the verified email on your record, or skip it? Sending is simulated in this local demo."
+        return "Would you like me to send the summary to the verified email on your record, or skip it? Sending is simulated in this demo."

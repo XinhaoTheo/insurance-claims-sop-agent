@@ -29,7 +29,13 @@ class TurnAnalysis(BaseModel):
     identity_evidence: IdentityFields = Field(default_factory=IdentityFields)
     hints: CaseHints = Field(default_factory=CaseHints)
     intent: Literal["status_inquiry", "denial_question", "document_submission", "payment_question", "next_steps", "general_claim_question"] | None = None
-    topic: Literal["overview", "denial", "documents", "alternatives", "submission_method", "processing_time", "deadline", "payment", "receipt", "format", "unknown"] = "overview"
+    topic: Literal["overview", "denial", "documents", "alternatives", "submission_method", "processing_time", "deadline", "payment", "receipt", "format", "summary", "unknown"] = Field(
+        default="overview",
+        description="The question to answer this turn, even when identity is also supplied. "
+        "Use payment for recorded expected or finalized insurer payments; summary for reviewing the email draft. "
+        "Use unknown for questions outside the supported claim topics, such as predicting future premiums. "
+        "Overview is for the claim's general status, not a substitute for a more specific question.",
+    )
     scope: Literal["in_scope", "out_of_scope", "mixed"] = "in_scope"
     emotion: Literal["neutral", "frustrated", "anxious", "angry", "confused"] = "neutral"
     refusal: bool = False
@@ -42,6 +48,7 @@ class TurnAnalysis(BaseModel):
 class ReplyPresentation(BaseModel):
     """Customer-facing wording without business state or action fields."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    caller_language: str = Field(min_length=1, description="Identify the language used by the caller samples. Write reply in this language.")
     reply: str = Field(min_length=1)
 
 

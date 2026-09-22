@@ -103,6 +103,61 @@ def test_exact_case_number_resolves_a_previous_service_date_clarification(conver
     assert snapshot["state"]["selected_case_id"] == "CL-2048"
 
 
+def test_exact_case_number_replaces_stale_descriptive_hints(conversation):
+    snapshot, _ = run(conversation, "mistaken-description", identity=IDENTITY,
+        hints={"case_type": "dental", "status": "denied", "year": 2024, "date_kind": "created"},
+        intent="denial_question")
+    assert snapshot["state"]["phase"] == "RESOLVE_INTENT"
+    snapshot, reply = run(conversation, "claim-number", hints={"case_id": "CL-2048"})
+    assert snapshot["state"]["selected_case_id"] == "CL-2048"
+    assert snapshot["state"]["case_hints"] == {"case_id": "CL-2048"}
+    assert set(snapshot["state"]["hint_sources"]) == {"case_id"}
+    assert "pathology report" in reply
+
+
+@pytest.mark.parametrize("phase", ["PROCESS_CASE", "POST_PROCESS"])
+def test_changed_case_description_starts_an_ordered_cycle(conversation, phase):
+    snapshot, _ = enter_post(conversation) if phase == "POST_PROCESS" else verify_and_find(conversation)
+    events_before = len(snapshot["events"])
+    snapshot, reply = run(conversation, "different-case",
+        hints={"case_type": "dental", "status": "closed"}, intent="status_inquiry")
+    assert snapshot["state"]["phase"] == "PROCESS_CASE"
+    assert snapshot["state"]["selected_case_id"] == "CL-1899"
+    assert snapshot["state"]["case_hints"] == {"case_type": "dental", "status": "closed"}
+    assert snapshot["state"]["discussed_topics"] == ["overview"]
+    assert snapshot["state"]["email_status"] == "not_offered"
+    assert snapshot["email_summary"] is None
+    assert "CL-1899" in reply and "CL-2048" not in reply
+    new_events = snapshot["events"][events_before:]
+    assert [e["detail"] for e in new_events if e["kind"] == "phase_changed"] == [
+        "VERIFY_ID → RESOLVE_INTENT", "RESOLVE_INTENT → PROCESS_CASE",
+    ]
+    kinds = [e["kind"] for e in new_events]
+    assert kinds.index("verify_identity") < kinds.index("find_my_claims") < kinds.index("get_selected_claim")
+
+
+def test_changed_creation_date_resolves_another_claim(conversation):
+    verify_and_find(conversation)
+    snapshot, reply = run(conversation, "different-year",
+        hints={"month": 1, "year": 2025, "date_kind": "created"}, intent="status_inquiry")
+    assert snapshot["state"]["selected_case_id"] == "CL-2011"
+    assert "CL-2011" in reply and "CL-2048" not in reply
+
+
+@pytest.mark.parametrize("case_id", ["CL-3001", "CL-NOT-FOUND"])
+def test_replacement_case_number_cannot_fall_back_to_an_owned_claim(conversation, case_id):
+    snapshot, _ = enter_post(conversation)
+    events_before = len(snapshot["events"])
+    snapshot, reply = run(conversation, "replacement-number", hints={"case_id": case_id})
+    assert snapshot["state"]["verified"]
+    assert snapshot["state"]["phase"] == "RESOLVE_INTENT"
+    assert snapshot["state"]["selected_case_id"] is None
+    assert snapshot["email_summary"] is None
+    assert "couldn't find a matching claim" in reply
+    assert "CL-2048" not in reply and "CL-3001" not in reply
+    assert not any(e["kind"] == "get_selected_claim" for e in snapshot["events"][events_before:])
+
+
 def test_correction_revokes_verified_access_before_case_disclosure(conversation):
     verify_and_find(conversation)
     snapshot, reply = run(conversation, "correction",
@@ -224,6 +279,39 @@ def test_changed_summary_requires_a_new_choice_and_version(conversation):
     assert snapshot["state"]["summary_version"] == version + 1
     assert snapshot["state"]["email_status"] == "awaiting_choice"
     assert "processing_time" in snapshot["email_summary"]["body"]
+
+
+def test_status_followup_after_email_offer_answers_without_sending(conversation):
+    snapshot, _ = enter_post(conversation)
+    version = snapshot["state"]["summary_version"]
+    snapshot, reply = run(conversation, "status-followup", intent="status_inquiry", topic="overview")
+    assert "Claim CL-2048" in reply and "is denied" in reply
+    assert "send the summary" in reply and "skip" in reply
+    assert snapshot["state"]["phase"] == "POST_PROCESS"
+    assert snapshot["state"]["email_status"] == "awaiting_choice"
+    assert snapshot["state"]["summary_version"] == version + 1
+    assert not any(e["kind"] in ("email_consent", "email_simulated") for e in snapshot["events"])
+    snapshot, _ = run(conversation, "consent-after-followup", email_choice="send")
+    assert snapshot["state"]["email_status"] == "simulated_sent"
+    assert snapshot["email_summary"]["version"] == version + 1
+
+
+def test_reviewing_email_draft_preserves_pending_consent_and_version(conversation):
+    snapshot, _ = enter_post(conversation)
+    draft = snapshot["email_summary"].copy()
+    topics = snapshot["state"]["discussed_topics"].copy()
+    events_before = len(snapshot["events"])
+    snapshot, reply = run(conversation, "review-draft", topic="summary", email_choice="unclear")
+    assert draft["subject"] in reply and draft["body"] in reply
+    assert "send the summary" in reply and "skip" in reply
+    assert snapshot["email_summary"] == draft
+    assert snapshot["state"]["summary_version"] == draft["version"]
+    assert snapshot["state"]["email_status"] == "awaiting_choice"
+    assert snapshot["state"]["status"] == "active"
+    assert snapshot["state"]["pending"] == "email_choice"
+    assert snapshot["state"]["discussed_topics"] == topics
+    assert not any(e["kind"] in ("summary_prepared", "email_consent", "email_simulated", "email_skipped")
+                   for e in snapshot["events"][events_before:])
 
 
 def test_human_offer_in_post_requires_email_offer_again_before_sending(conversation):

@@ -38,6 +38,6 @@ CONTEXT_KEYS = (
     "phase", "pending", "case_hints", "intent",
     "identity_collected", "previous_assistant", "caller_action",
 )
-REPLY_CONTEXT_KEYS = ("previous_assistant", "previous_caller", "caller_action")
+REPLY_CONTEXT_KEYS = ("previous_caller", "previous_assistant")
 ANTHROPIC_MAX_TOKENS = 2048
 ANTHROPIC_API_VERSION = "2023-06-01"
