@@ -124,3 +124,5 @@ SQLite data is stored automatically in a Docker volume and survives normal resta
 The first public deployment targets **Render Free**, using the included `render.yaml`. It sleeps after 15 idle minutes and resets saved conversations when it restarts. See [Hosting](docs/hosting.md) for setup and optional paid hosting with persistent SQLite. Hosted demos use each visitor's API key and restrict model endpoints; local Docker keeps configurable endpoints and optional server defaults.
 
 For automated evaluation, open the [local API documentation](http://localhost:8000/docs). See [Architecture](docs/architecture.md) for implementation details.
+
+See [Testing](docs/testing.md) to run the real-model acceptance scenarios and measure response latency.
