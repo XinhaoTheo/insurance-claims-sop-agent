@@ -4,6 +4,8 @@ A chat demo for an insurance claims support agent, using the same code for local
 
 The agent requires three matching identity fields before accessing claim details and remembers useful information across workflow stages. The UI shows the conversation, current phase, saved case hints, and activity log. Customer records are synthetic; email delivery and human handoff are simulated.
 
+**[Open the hosted demo](https://insurance-claims-sop-agent-d5gs.onrender.com)** · Bring your own API key. The free service may take about a minute to wake.
+
 <!-- Add a demo screenshot here when available. -->
 
 ## Overall workflow
@@ -48,7 +50,7 @@ You need **Git**, **Docker Desktop** running (or Docker Engine with Compose), an
 ### 1. Start the app
 
 ```bash
-git clone https://github.com/XinhaoTheo/insurance-claims-sop-agent.git
+git clone --branch feat/hosted-demo https://github.com/XinhaoTheo/insurance-claims-sop-agent.git
 cd insurance-claims-sop-agent
 docker compose up --build -d
 ```

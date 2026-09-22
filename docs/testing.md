@@ -1,6 +1,6 @@
 # Testing
 
-The automated tests check SOP rules with injected model observations and mock HTTP responses. The live evaluation calls the configured model through the running application's HTTP API. Mocks are never a runtime chat mode.
+The automated tests check SOP rules with injected model observations and mock HTTP responses. The live evaluation calls the configured model through the running application's HTTP API. Mocks are never a runtime chat mode. See [Evaluation results](evaluation-results.md) for the latest measured run.
 
 ## Run the live evaluation
 
