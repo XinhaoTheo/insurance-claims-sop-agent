@@ -60,7 +60,7 @@ Every new turn in an active session uses the configured external model through `
 
 The implementations follow the [OpenAI Chat Completions reference](https://developers.openai.com/api/reference/resources/chat) and [Anthropic Messages reference](https://platform.claude.com/docs/en/api/messages/create). Anthropic authentication/version headers are described in its [API overview](https://platform.claude.com/docs/en/api/overview).
 
-The analysis prompt separates the extraction and SOP constraints. Pydantic permits bounded intent/topic/choice values, identity observations, verbatim `identity_evidence`, and case hints. There are no model-writable fields for `verified`, `phase`, or tool authority. Unknown fields are rejected. Invalid analysis JSON or schema output returns a model error immediately; request failures and validation errors leave business state unadvanced. There is no local language parser or provider fallback.
+The analysis prompt separates the extraction and SOP constraints. Pydantic permits bounded intent/topic/choice values, standardized identity observations, verbatim `identity_evidence` addressed separately, and case hints. The schema enforces the identity contract (ISO `dob`, `+1` phone, lowercase email, match-form name, uppercase policy number, four-digit SSN suffix); a non-conforming value is a model error, not something the backend repairs. There are no model-writable fields for `verified`, `phase`, or tool authority. Unknown fields are rejected. Invalid analysis JSON or schema output returns a model error immediately; request failures and validation errors leave business state unadvanced. There is no local language parser or provider fallback.
 
 The analysis model receives the newest caller message plus whitelisted context: phase, pending task, hints, intent, collected identity field names, the previous assistant reply, and any `caller_action`. It does not receive the entire customer or claims database. The previous caller message is supplied separately to the renderer, where it helps preserve the conversation's language when the current input is an English-labeled UI action. Caller assertions about a case remain distinct from facts retrieved from the fixture repository. Language follows the conversation instead of a fixed `en`/`zh` state flag.
 
@@ -78,15 +78,17 @@ Controlled model responses are test doubles confined to automated tests. They ex
 
 ## 2. VERIFY_ID: deterministic identity gate
 
-`FixtureRepository.verify_identity` normalizes permitted fields, resolves the same unique customer and requires at least three distinct matching categories: full name, DOB, phone, email or SSN last four. A policy number helps locate the customer but does not count toward that threshold. Registered aliases stay within their original category. Non-SSN identity types are not silently treated as SSNs.
+`FixtureRepository.verify_identity` matches already-standardized fields against per-customer match values prepared on first use, resolves the same unique customer and requires at least three distinct matching categories: full name, DOB, phone, email or SSN last four. A policy number helps locate the customer but does not count toward that threshold. Registered aliases stay within their original category. Non-SSN identity types are not silently treated as SSNs.
 
-The model extracts and normalizes identity fields. The harness accepts those structured observations and passes them to the identity repository for matching; it does not reparse caller text or cross-check quotes and date components. `identity_evidence` is used to redact original expressions, such as a written-out birthdate, before storing the transcript. Extraction accuracy therefore depends on the model; schema validation and record matching do not prove that every extracted value was stated by the caller.
+The model extracts and standardizes identity fields; the schema rejects values outside that contract, so a non-conforming value fails the turn and the caller retries instead of the backend repairing it. The harness accepts the structured observations and passes them to the identity repository for matching; it does not reparse caller text or cross-check quotes and date components. `identity_evidence` is used to redact original expressions, such as a written-out birthdate, before storing the transcript. Extraction accuracy therefore depends on the model; schema validation and record matching do not prove that every extracted value was stated by the caller.
 
-Supplied conflicting fields cannot be ignored just because three other values happen to match. Identity corrections and expired verification revoke access. The protected tools also check verification and ownership at their own entry points.
+For an invalid or ambiguous caller value, the model returns a null identity field and retains its raw span in `identity_evidence`. Evidence presence distinguishes a supplied-but-unusable field from one the caller never provided. The harness retains an unresolved marker in temporary identity memory, clears the old value on correction, and asks for clarification. The marker blocks verification across turns until the caller provides a usable value. No language parsing or formatting repair is added to the backend.
+
+Supplied conflicting or unresolved fields cannot be ignored just because three other values happen to match. Identity corrections and expired verification revoke access. In POST_PROCESS, a proposed email recipient is handled separately: an unusable address blocks sending without replacing the verified identity email. The protected tools also check verification and ownership at their own entry points.
 
 ```mermaid
 flowchart TD
-    Input["New or corrected identity fields"] --> Match["Normalize and match unique customer"]
+    Input["New or corrected identity fields"] --> Match["Match standardized values to a unique customer"]
     Match --> Gate{"At least 3 distinct matching PII categories and no unresolved conflict?"}
     Gate -->|No| Stay["Stay VERIFY_ID; explain, offer alternate fields or human option"]
     Stay --> Input
