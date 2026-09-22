@@ -20,6 +20,8 @@ npm ci
 npm run build
 ```
 
+The automated suite also covers disputed record ownership: revoke access, clear stale identity and drafts, reverify, replay safely, and roll back a failed reply.
+
 ## Local live evaluation
 
 Configure the model in `.env` as described in the [README](../README.md#local-setup), then run from the repository root:

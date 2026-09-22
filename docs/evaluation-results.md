@@ -14,6 +14,10 @@ Tested **September 22, 2026**, application commit **`3a8c104`**, on [Render Free
 
 Coverage includes verification and corrections, SSN alternatives, remembered hints, case ownership, grounded payments, scope, emotional recovery, Chinese consent, and email send/skip. Review of saved replies found no additional material SOP or factual errors; some Chinese medical wording remained literal.
 
+## Subsequent local recovery checks
+
+The ownership-dispute recovery update passed **268 tests and 22 subtests**. Six focused real-model checks passed in English and Chinese, distinguishing ownership denial from switching claims, missing results, and disagreement with a decision. These checks do not replace the full cloud run above. The frontend build also passed.
+
 ## Warm-service performance
 
 | Measurement | Time |

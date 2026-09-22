@@ -90,6 +90,11 @@ class Harness:
     def run(self, snapshot, analysis: TurnAnalysis, identity: dict, turn_id: str):
         """Apply SOP rules and return approved content for the presentation model."""
         state = snapshot["state"]
+        ownership_disputed = analysis.ownership_disputed and state["verified"]
+        if ownership_disputed:
+            identity_reset(snapshot, "Caller disputed record ownership; fresh identity verification required.")
+            identity.clear()
+            state.update(case_hints={}, hint_sources={}, discussed_topics=[])
         # A quoted value with no standardized form is unresolved, not absent.
         submitted = {
             **dict.fromkeys(analysis.identity_evidence.model_dump(exclude_none=True)),
@@ -146,7 +151,9 @@ class Harness:
         if analysis.human_requested:
             state.update(status="handoff_requested", pending=None)
             event(snapshot, "handoff_requested", "Simulated human handoff; no live representative connected.")
-            return empathy + "I've recorded a simulated request for a human representative. This demo does not connect to a live agent. Your verification status stays unchanged."
+            return empathy + "I've recorded a simulated request for a human representative. This demo does not connect to a live agent. A human handoff does not bypass identity verification."
+        if ownership_disputed:
+            return empathy + "The records may not match the person or claim you intended. I've paused claim access and cleared the previous verification and case selection. Please check and provide three identity details again; you can use your full name, date of birth, phone, email, or SSN last four. You can use phone or email instead of SSN, or ask for a human representative."
         if analysis.representative:
             state["representative_required"] = True
         if state["representative_required"]:

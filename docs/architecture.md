@@ -110,6 +110,8 @@ Canonical formats include ISO dates, US phones as `+1` plus ten digits, lowercas
 
 An unresolved correction clears the old value and blocks verification until clarified, even when three other fields match. In `POST_PROCESS`, a proposed recipient is handled separately and does not replace the verified identity email.
 
+If the caller explicitly says the displayed records are not theirs, the harness revokes verification, clears old identity values, case hints, selection, and draft, then asks for three fresh identity details or offers human support. Newly supplied details are retained. Missing search results and ordinary case changes do not trigger this recovery.
+
 Evidence also supports transcript redaction. Extraction and evidence accuracy still depend on the model. If the model emits an invalid non-null value, schema validation fails the turn; the backend does not repair it.
 
 ### Verify identity

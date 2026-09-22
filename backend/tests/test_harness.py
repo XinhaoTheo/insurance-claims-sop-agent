@@ -407,3 +407,61 @@ def test_past_deadline_does_not_turn_into_a_new_week_to_appeal(conversation):
     assert "has passed" in reply
     assert "late appeal" in reply
     assert "within a week" not in reply
+
+
+@pytest.mark.parametrize("phase", ["RESOLVE_INTENT", "PROCESS_CASE", "POST_PROCESS"])
+def test_ownership_dispute_requires_fresh_identity_before_any_claim_access(conversation, phase, monkeypatch):
+    if phase == "RESOLVE_INTENT":
+        run(conversation, identity=IDENTITY)
+    elif phase == "POST_PROCESS":
+        enter_post(conversation)
+    else:
+        verify_and_find(conversation)
+    harness, snapshot, identity = conversation
+    assert snapshot["state"]["phase"] == phase
+    with monkeypatch.context() as patch:
+        def blocked(*args):
+            pytest.fail("Disputed ownership must block protected reads")
+        patch.setattr(harness.repo, "guarded_claim", blocked)
+        patch.setattr(harness.repo, "guarded_claims", blocked)
+        patch.setattr(harness.repo, "get_contact", blocked)
+        snapshot, reply = run(conversation, "dispute", ownership_disputed=True,
+                              email_choice="send", finish=True, emotion="confused")
+    state = snapshot["state"]
+    assert state["phase"] == "VERIFY_ID" and not state["verified"]
+    assert state["verified_party_id"] is None and state["selected_case_id"] is None
+    assert identity == {} and state["identity_collected"] == []
+    assert state["case_hints"] == {} and state["hint_sources"] == {}
+    assert state["discussed_topics"] == [] and snapshot["email_summary"] is None
+    assert "CL-2048" not in reply and "pathology report" not in reply
+    assert "three identity details again" in reply
+    snapshot, _ = run(conversation, "no-new-identity", topic="denial")
+    assert not snapshot["state"]["verified"]
+    snapshot, _ = run(conversation, "partial", identity={"name": IDENTITY["name"]})
+    assert not snapshot["state"]["verified"]
+    snapshot, _ = run(conversation, "fresh", identity={"dob": IDENTITY["dob"], "ssn_last4": IDENTITY["ssn_last4"]},
+                      hints={"case_id": "CL-2048"})
+    assert snapshot["state"]["verified"]
+    assert snapshot["state"]["selected_case_id"] == "CL-2048"
+
+
+def test_dispute_retains_new_identity_and_affirmative_case_hints(conversation):
+    verify_and_find(conversation)
+    snapshot, _ = run(conversation, "dispute", ownership_disputed=True,
+                      identity={"email": "margaret@email.com"}, hints={"case_id": "CL-2048"})
+    assert not snapshot["state"]["verified"]
+    assert conversation[2] == {"email": "margaret@email.com"}
+    assert snapshot["state"]["case_hints"] == {"case_id": "CL-2048"}
+
+
+def test_no_matching_claim_does_not_revoke_identity(conversation):
+    snapshot, _ = run(conversation, identity=IDENTITY, hints={"case_id": "CL-MISSING"})
+    assert snapshot["state"]["phase"] == "RESOLVE_INTENT"
+    assert snapshot["state"]["verified"] and conversation[2] == IDENTITY
+
+
+def test_disputed_ownership_can_request_human_without_reverification(conversation):
+    verify_and_find(conversation)
+    snapshot, _ = run(conversation, ownership_disputed=True, human_requested=True)
+    assert snapshot["state"]["status"] == "handoff_requested"
+    assert not snapshot["state"]["verified"] and conversation[2] == {}

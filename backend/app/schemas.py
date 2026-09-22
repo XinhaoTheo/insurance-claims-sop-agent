@@ -92,6 +92,12 @@ class TurnAnalysis(BaseModel):
     emotion: Literal["neutral", "frustrated", "anxious", "angry", "confused"] = "neutral"
     refusal: bool = False
     human_requested: bool = False
+    ownership_disputed: bool = Field(
+        default=False,
+        description="True only for an explicit denial of ownership, such as 'these claims are not mine' "
+        "or 'this is someone else's account'. 'Not this claim, I mean my other claim' is false: "
+        "it changes the selected case without denying ownership. Missing results and disagreement with decisions are false.",
+    )
     representative: bool = False
     finish: bool = False
     email_choice: Literal["send", "skip", "unclear"] = Field(

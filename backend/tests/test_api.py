@@ -659,3 +659,36 @@ def test_expired_session_locks_are_reclaimed_while_held_locks_are_kept(api):
     api[1].state.locks[session_id] = (held, 0)
     api[0].get(f"/api/sessions/{session_id}", headers=actor[1])
     assert session_id not in api[1].state.locks
+
+
+def test_ownership_recovery_persists_and_replays_without_sending(api):
+    actor = session(api)
+    reach_post(api, actor)
+    message = "These are not my claims."
+    result = say(api, actor, message, "dispute", {"ownership_disputed": True}, caller_action="send_summary")
+    assert result["state"]["phase"] == "VERIFY_ID"
+    assert not result["state"]["verified"] and result["email_summary"] is None
+    replay = say(api, actor, message, "dispute", caller_action="send_summary")
+    assert replay == result
+    restored = api[0].get(f"/api/sessions/{actor[0]['session_id']}", headers=actor[1]).json()
+    assert restored["state"] == result["state"]
+    following = say(api, actor, "Please explain the denial.", "followup", {"intent": "denial_question"})
+    assert not following["state"]["verified"] and "CL-2048" not in following["reply"]
+    with sqlite3.connect(api[2]["database"]) as db:
+        assert db.execute("SELECT count(*) FROM email_outbox").fetchone()[0] == 0
+
+
+def test_failed_dispute_render_keeps_previous_committed_state(api, monkeypatch):
+    actor = session(api)
+    before = say(api, actor, SAMPLE, "identity", SAMPLE_ANALYSIS)
+    async def failed_render(*args):
+        raise ModelError("Model unavailable")
+    with monkeypatch.context() as patch:
+        patch.setattr(main, "render_reply", failed_render)
+        failed = post(api, actor, "Those claims belong to someone else.", "dispute", {"ownership_disputed": True})
+    assert failed.status_code == 502
+    restored = api[0].get(f"/api/sessions/{actor[0]['session_id']}", headers=actor[1]).json()
+    assert restored["state"] == before["state"]
+    assert api[1].state.identities[actor[0]["session_id"]][0] == SAMPLE_ANALYSIS["identity"]
+    retried = say(api, actor, "Those claims belong to someone else.", "dispute", {"ownership_disputed": True})
+    assert not retried["state"]["verified"]

@@ -71,6 +71,16 @@ SYSTEM = """# Role and boundaries
   that customer.
 
 # Case hints
+- Set ownership_disputed when the caller explicitly denies owning the displayed
+  claims or says the customer record belongs to someone else. Do not set it just
+  because a search found nothing, the caller means another claim of their own,
+  or they disagree with a denial or payment. Apply this distinction in any language.
+- "Not this claim; I mean my other dental claim" sets ownership_disputed=false:
+  the caller is changing their intended case, not denying that the record is theirs.
+  Do not infer an ownership denial from a case correction or missing match.
+- Do not extract identifiers or descriptions of claims the caller says are not
+  theirs as desired case hints. Still extract newly supplied identity values and
+  affirmative hints about the claim they actually want.
 - Save case identifiers, claim type, status, month, and year whenever the caller
   states them, even during identity verification.
 - Return only fields newly supplied or corrected in the latest caller message.
