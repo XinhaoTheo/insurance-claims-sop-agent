@@ -63,9 +63,9 @@ class Client:
             raise AssertionError(f"{method} {path}: expected HTTP {expected}, got {status}")
         return data
 
-    def session(self):
+    def session(self, demo_date="2026-03-10"):
         return self.request("POST", "/api/sessions", {
-            **self.model_config.model_dump(), "demo_date": "2026-03-10",
+            **self.model_config.model_dump(), "demo_date": demo_date,
         }, expected=201)
 
     def say(self, session, text, turn_id=None, expected=200, caller_action=None):
