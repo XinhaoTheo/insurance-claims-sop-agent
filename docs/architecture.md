@@ -25,7 +25,6 @@ flowchart TD
     Persist --> User
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 
@@ -68,7 +67,6 @@ flowchart TD
     Bind --> Process["PROCESS_CASE"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 ### Process the case
@@ -86,7 +84,6 @@ flowchart LR
     Render -->|Failure| Retry["Rollback; caller may retry"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 ## Identity: extraction, validation, matching
@@ -101,7 +98,6 @@ flowchart LR
     PII --> Verify["Match customer records"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 The model standardizes identity values; Pydantic checks their format; business code matches them against customer records. There is no business-layer `normalize()` that repairs input.
@@ -131,7 +127,6 @@ flowchart TD
     Verified --> Next["RESOLVE_INTENT"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 ## Conversation and consent
@@ -151,7 +146,6 @@ flowchart TD
     Decline --> Gate
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 The renderer receives approved content and phrases it in the caller's language. It has no tools or phase authority. UI labels and the canonical email draft remain English. JSON validation checks structure, not factual or translation accuracy.
@@ -174,7 +168,6 @@ flowchart TD
     Retry --> Offer
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 UI buttons use `caller_action` values such as `send_summary`; they still pass through the SOP gates. Email delivery and handoff are simulated. The app does not change claim decisions, submit appeals, or transfer payments.
@@ -191,7 +184,6 @@ flowchart LR
     Constants --> Harness["SOP and business tools"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 - Configuration supports OpenAI-compatible Chat Completions and native Anthropic Messages. Explicit settings override defaults; changing endpoint or protocol cannot reuse a deployment key without an explicit key.
@@ -215,7 +207,6 @@ flowchart LR
     Transaction --> Response["Return redacted snapshot"]
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
 
 Run one worker and one instance: locks and temporary credentials are process-local. Local Docker persists SQLite in a volume; Render Free uses temporary storage. See [Hosting](hosting.md) and [Testing](testing.md).
@@ -241,5 +232,4 @@ flowchart TD
     Cloud --> Model
 
     classDef default fill:#eef2ff,stroke:#818cf8,color:#1e1b4b;
-    linkStyle default stroke:#64748b;
 ```
