@@ -48,14 +48,20 @@ class ApiError extends Error {
 }
 async function api<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
-  const body = await response.json();
-  if (!response.ok) throw new ApiError(body.detail, response.status);
+  let body: { detail?: string };
+  try { body = await response.json(); }
+  catch {
+    if (response.ok) throw new ApiError('The server returned an invalid JSON response. Please retry.', response.status);
+    body = {};
+  }
+  if (!response.ok) throw new ApiError(body?.detail ?? (response.statusText || 'The request failed.'), response.status);
   return body as T;
 }
 function display(value: string | number): string { return String(value).replaceAll('_', ' '); }
 function savedCredentials(): Credentials | null {
   const saved = sessionStorage.getItem(STORAGE_KEY);
-  return saved ? JSON.parse(saved) : null;
+  if (!saved) return null;
+  try { return JSON.parse(saved); } catch { sessionStorage.removeItem(STORAGE_KEY); return null; }
 }
 
 export default function App() {
@@ -179,7 +185,7 @@ export default function App() {
     const defaults = config!;
     const endpoint = defaults.protocol_base_urls[value];
     const allowed = defaults.allowed_model_base_urls;
-    setApiProtocol(value); setBaseUrl(allowed && !allowed.includes(endpoint) ? allowed[0] : endpoint);
+    setApiProtocol(value); setBaseUrl(allowed && !allowed.includes(endpoint) ? (allowed[0] ?? endpoint) : endpoint);
     setModel(''); setApiKey(''); setModelError(''); setModelMessage('');
   }
   function fillSample(value: string) { setInput(value); textarea.current?.focus(); }
